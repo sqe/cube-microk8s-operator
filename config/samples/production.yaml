@@ -1,0 +1,34 @@
+apiVersion: platform.cube.dev/v1alpha1
+kind: CubeCluster
+metadata:
+  name: analytics
+  namespace: cube
+spec:
+  image: cubejs/cube:v1.7.20@sha256:7f14f4be9f3303afe48a16584480c8a9dc15f44c13daf66c2a5b31019025b71a
+  modelConfigMap: cube-model
+  configurationSecret: cube-configuration
+  api:
+    replicas: 2
+    resources:
+      requests: {cpu: "2", memory: 3Gi}
+      limits: {cpu: "4", memory: 6Gi}
+  refreshWorker:
+    replicas: 1
+    resources:
+      requests: {cpu: "2", memory: 6Gi}
+      limits: {cpu: "4", memory: 8Gi}
+  cubeStore:
+    mode: clustered
+    image: cubejs/cubestore:v1.7.20@sha256:cd5fe68049204640704a6412a39e7a09eb391fc70890577dd21b5480d85cb219
+    workers: 2
+    resources:
+      requests: {cpu: "4", memory: 8Gi}
+      limits: {cpu: "8", memory: 12Gi}
+    remoteStorage:
+      type: s3
+      s3:
+        bucket: replace-me-cubestore
+        region: us-west-2
+    scratch: {size: 100Gi}
+  service:
+    type: LoadBalancer

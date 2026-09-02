@@ -1,0 +1,33 @@
+#cloud-config
+hostname: ${hostname}
+manage_etc_hosts: true
+package_update: true
+package_upgrade: false
+
+users:
+  - default
+  - name: ${username}
+    groups: [adm, sudo]
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    ssh_authorized_keys:
+      - ${ssh_public_key}
+
+packages:
+  - qemu-guest-agent
+  - nfs-common
+  - jq
+  - curl
+
+snap:
+  commands:
+    - snap install microk8s --classic --channel=${microk8s_channel}
+
+runcmd:
+  - systemctl enable --now qemu-guest-agent
+  - usermod -aG microk8s ${username}
+  - mkdir -p /home/${username}/.kube
+  - chown -R ${username}:${username} /home/${username}/.kube
+  - timeout 600 microk8s status --wait-ready
+
+final_message: "MicroK8s node ${hostname} initialized after $UPTIME seconds"

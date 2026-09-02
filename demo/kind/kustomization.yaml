@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: cube-demo
+resources:
+  - namespace.yaml
+  - postgres/postgres.yaml
+  - telemetry/collector.yaml
+  - cube.yaml
+configMapGenerator:
+  - name: cube-model
+    files:
+      - KubernetesTelemetry.yml=model/KubernetesTelemetry.yml
+generatorOptions:
+  disableNameSuffixHash: true

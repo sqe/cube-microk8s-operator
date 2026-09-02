@@ -1,0 +1,42 @@
+proxmox_endpoint   = "https://pve.example.com:8006/"
+proxmox_insecure   = false
+template_vm_id     = 9000
+template_node_name = "pve1"
+
+nodes = {
+  cube-mk8s-1 = {
+    proxmox_node = "pve1"
+    vm_id        = 3101
+    ipv4_address = "192.168.1.61/24"
+  }
+  cube-mk8s-2 = {
+    proxmox_node = "pve2"
+    vm_id        = 3102
+    ipv4_address = "192.168.1.62/24"
+  }
+  cube-mk8s-3 = {
+    proxmox_node = "pve3"
+    vm_id        = 3103
+    ipv4_address = "192.168.1.63/24"
+  }
+}
+
+ipv4_gateway = "192.168.1.1"
+dns_servers  = ["192.168.1.1", "1.1.1.1"]
+
+network_bridge       = "vmbr0"
+network_vlan_id      = null
+vm_datastore_id      = "local-lvm"
+snippets_datastore_id = "local"
+
+vm_cpu_cores    = 4
+vm_memory_mb    = 16384
+vm_disk_size_gb = 100
+
+cloud_init_username = "ubuntu"
+ssh_public_key      = "ssh-ed25519 REPLACE_WITH_YOUR_PUBLIC_KEY"
+microk8s_channel    = "1.34/stable"
+protect_vms         = true
+
+# Do not store the API token in this file. Export it instead:
+# export TF_VAR_proxmox_api_token='terraform@pve!cube=SECRET'

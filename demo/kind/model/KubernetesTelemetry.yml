@@ -1,0 +1,36 @@
+cubes:
+  - name: KubernetesTelemetry
+    sql_table: public.kubernetes_telemetry
+    description: Point-in-time health observations collected from the Kubernetes API.
+    measures:
+      - name: count
+        type: count
+      - name: restartCount
+        sql: restart_count
+        type: sum
+    dimensions:
+      - name: observationKey
+        sql: "cluster_name || ':' || resource_kind || ':' || namespace || ':' || resource_name || ':' || collected_at::text"
+        type: string
+        primary_key: true
+      - name: collectedAt
+        sql: collected_at
+        type: time
+      - name: cluster
+        sql: cluster_name
+        type: string
+      - name: namespace
+        sql: namespace
+        type: string
+      - name: resourceKind
+        sql: resource_kind
+        type: string
+      - name: resourceName
+        sql: resource_name
+        type: string
+      - name: phase
+        sql: phase
+        type: string
+      - name: ready
+        sql: ready
+        type: boolean
