@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -30,7 +32,10 @@ const (
 
 type CubeClusterReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme     *runtime.Scheme
+	HTTPClient interface {
+		Do(*http.Request) (*http.Response, error)
+	}
 }
 
 // +kubebuilder:rbac:groups=platform.cube.dev,resources=cubeclusters,verbs=get;list;watch;update;patch
@@ -76,7 +81,11 @@ func (r *CubeClusterReconciler) Reconcile(ctx context.Context, request ctrl.Requ
 	condition := metav1.ConditionFalse
 	reason := "Progressing"
 	if available {
-		condition, reason, message = metav1.ConditionTrue, "Available", "Cube API, refresh worker, and Cube Store are ready"
+		if err := r.apiHealthy(ctx, cluster); err != nil {
+			condition, reason, message = metav1.ConditionFalse, "APIHealthCheckFailed", err.Error()
+		} else {
+			condition, reason, message = metav1.ConditionTrue, "Available", "Cube API readiness endpoint is healthy and all workloads are ready"
+		}
 	}
 	if err := r.setStatus(ctx, cluster, condition, reason, message, ready); err != nil {
 		return ctrl.Result{}, err
@@ -85,6 +94,27 @@ func (r *CubeClusterReconciler) Reconcile(ctx context.Context, request ctrl.Requ
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 	return ctrl.Result{}, nil
+}
+
+func (r *CubeClusterReconciler) apiHealthy(ctx context.Context, cluster *platformv1alpha1.CubeCluster) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		fmt.Sprintf("http://%s-api.%s.svc:4000/readyz", cluster.Name, cluster.Namespace), nil)
+	if err != nil {
+		return fmt.Errorf("build Cube API health request: %w", err)
+	}
+	httpClient := r.HTTPClient
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: 5 * time.Second}
+	}
+	response, err := httpClient.Do(request)
+	if err != nil {
+		return fmt.Errorf("Cube API readiness check failed: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return fmt.Errorf("Cube API readiness check returned HTTP %d", response.StatusCode)
+	}
+	return nil
 }
 
 func (r *CubeClusterReconciler) workloadsAvailable(ctx context.Context, cluster *platformv1alpha1.CubeCluster) (int32, bool, string, error) {
@@ -186,44 +216,18 @@ func (r *CubeClusterReconciler) validateReferences(ctx context.Context, cluster 
 }
 
 func (r *CubeClusterReconciler) reconcileObject(ctx context.Context, owner *platformv1alpha1.CubeCluster, desired client.Object) error {
-	current := desired.DeepCopyObject().(client.Object)
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, current, func() error {
-		resourceVersion := current.GetResourceVersion()
-		copyInto(current, desired)
-		current.SetResourceVersion(resourceVersion)
-		return controllerutil.SetControllerReference(owner, current, r.Scheme)
-	})
-	return err
-}
-
-func copyInto(dst, src client.Object) {
-	switch d := dst.(type) {
-	case *appsv1.Deployment:
-		*d = *src.(*appsv1.Deployment).DeepCopy()
-	case *appsv1.StatefulSet:
-		*d = *src.(*appsv1.StatefulSet).DeepCopy()
-	case *corev1.Service:
-		clusterIP, clusterIPs := d.Spec.ClusterIP, d.Spec.ClusterIPs
-		ipFamilies, ipFamilyPolicy := d.Spec.IPFamilies, d.Spec.IPFamilyPolicy
-		healthCheckNodePort := d.Spec.HealthCheckNodePort
-		allocatedNodePorts := map[string]int32{}
-		for _, port := range d.Spec.Ports {
-			allocatedNodePorts[port.Name] = port.NodePort
-		}
-		*d = *src.(*corev1.Service).DeepCopy()
-		d.Spec.ClusterIP, d.Spec.ClusterIPs = clusterIP, clusterIPs
-		d.Spec.IPFamilies, d.Spec.IPFamilyPolicy = ipFamilies, ipFamilyPolicy
-		d.Spec.HealthCheckNodePort = healthCheckNodePort
-		for i := range d.Spec.Ports {
-			if d.Spec.Ports[i].NodePort == 0 {
-				d.Spec.Ports[i].NodePort = allocatedNodePorts[d.Spec.Ports[i].Name]
-			}
-		}
-	case *policyv1.PodDisruptionBudget:
-		*d = *src.(*policyv1.PodDisruptionBudget).DeepCopy()
-	case *networkingv1.NetworkPolicy:
-		*d = *src.(*networkingv1.NetworkPolicy).DeepCopy()
+	if err := controllerutil.SetControllerReference(owner, desired, r.Scheme); err != nil {
+		return err
 	}
+	gvks, _, err := r.Scheme.ObjectKinds(desired)
+	if err != nil {
+		return fmt.Errorf("resolve desired object kind: %w", err)
+	}
+	if len(gvks) == 0 {
+		return fmt.Errorf("resolve desired object kind: no registered kind")
+	}
+	desired.GetObjectKind().SetGroupVersionKind(gvks[0])
+	return r.Patch(ctx, desired, client.Apply, client.FieldOwner("cube-operator"), client.ForceOwnership)
 }
 
 func (r *CubeClusterReconciler) objects(cluster *platformv1alpha1.CubeCluster) []client.Object {
@@ -391,15 +395,22 @@ func (r *CubeClusterReconciler) removeObsoleteStore(ctx context.Context, c *plat
 }
 
 func (r *CubeClusterReconciler) setStatus(ctx context.Context, c *platformv1alpha1.CubeCluster, status metav1.ConditionStatus, reason, message string, ready int32) error {
-	base := c.DeepCopy()
-	c.Status.ObservedGeneration = c.Generation
-	c.Status.ReadyAPIs = ready
-	c.Status.Endpoint = fmt.Sprintf("http://%s-api.%s.svc:4000", c.Name, c.Namespace)
-	apimeta.SetStatusCondition(&c.Status.Conditions, metav1.Condition{Type: "Ready", Status: status, Reason: reason, Message: message, ObservedGeneration: c.Generation})
-	if err := r.Status().Patch(ctx, c, client.MergeFrom(base)); err != nil {
-		return fmt.Errorf("update CubeCluster status: %w", err)
-	}
-	return nil
+	key := client.ObjectKeyFromObject(c)
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		latest := &platformv1alpha1.CubeCluster{}
+		if err := r.Get(ctx, key, latest); err != nil {
+			return err
+		}
+		base := latest.DeepCopy()
+		latest.Status.ObservedGeneration = latest.Generation
+		latest.Status.ReadyAPIs = ready
+		latest.Status.Endpoint = fmt.Sprintf("http://%s-api.%s.svc:4000", latest.Name, latest.Namespace)
+		apimeta.SetStatusCondition(&latest.Status.Conditions, metav1.Condition{Type: "Ready", Status: status, Reason: reason, Message: message, ObservedGeneration: latest.Generation})
+		if err := r.Status().Patch(ctx, latest, client.MergeFrom(base)); err != nil {
+			return fmt.Errorf("update CubeCluster status: %w", err)
+		}
+		return nil
+	})
 }
 
 func (r *CubeClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {

@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 from decimal import InvalidOperation
 import logging
+import requests
 
 import kopf
 from kubernetes import client, config, dynamic
@@ -161,6 +162,15 @@ def workload_readiness(spec, name, namespace):
     return api_ready, available, "; ".join(parts)
 
 
+def api_healthy(name, namespace):
+    url = f"http://{name}-api.{namespace}.svc:4000/readyz"
+    try:
+        response = requests.get(url, timeout=5)
+        response.raise_for_status()
+    except requests.RequestException as error:
+        raise RuntimeError(f"Cube API readiness check failed: {error}") from error
+
+
 def set_status(
     patch,
     old_status,
@@ -229,17 +239,15 @@ def reconcile(spec, name, namespace, meta, status, patch, **_):
                 delete_if_present(api_version, kind, f"{name}-{component}", namespace)
         ready, available, message = workload_readiness(spec, name, namespace)
         if available:
-            set_status(
-                patch,
-                status,
-                generation,
-                namespace,
-                name,
-                ready,
-                "True",
-                "Available",
-                "Cube API, refresh worker, and Cube Store are ready",
-            )
+            try:
+                api_healthy(name, namespace)
+            except RuntimeError as error:
+                set_status(patch, status, generation, namespace, name, ready,
+                           "False", "APIHealthCheckFailed", str(error))
+            else:
+                set_status(patch, status, generation, namespace, name, ready,
+                           "True", "Available",
+                           "Cube API readiness endpoint is healthy and all workloads are ready")
         else:
             set_status(
                 patch,

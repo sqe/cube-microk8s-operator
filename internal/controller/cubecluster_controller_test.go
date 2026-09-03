@@ -2,6 +2,8 @@ package controller
 
 import (
 	"context"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -135,17 +137,18 @@ func TestWorkloadsAvailableRequiresEveryComponent(t *testing.T) {
 	}
 }
 
-func TestCopyIntoPreservesAllocatedServiceFields(t *testing.T) {
-	family := corev1.IPFamilyPolicySingleStack
-	current := &corev1.Service{Spec: corev1.ServiceSpec{
-		ClusterIP: "10.0.0.1", ClusterIPs: []string{"10.0.0.1"},
-		IPFamilies: []corev1.IPFamily{corev1.IPv4Protocol}, IPFamilyPolicy: &family,
-		Ports: []corev1.ServicePort{{Name: "http", Port: 4000, NodePort: 30123}},
+func TestAPIHealthyRequiresSuccessfulReadinessResponse(t *testing.T) {
+	cluster := testCluster()
+	client := &staticHTTPClient{response: &http.Response{
+		StatusCode: http.StatusServiceUnavailable,
+		Body:       io.NopCloser(strings.NewReader("unavailable")),
 	}}
-	desired := &corev1.Service{Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Name: "http", Port: 4000}}}}
-	copyInto(current, desired)
-	if current.Spec.ClusterIP != "10.0.0.1" || current.Spec.Ports[0].NodePort != 30123 {
-		t.Fatalf("allocated service fields were not preserved: %#v", current.Spec)
+	r := &CubeClusterReconciler{HTTPClient: client}
+	if err := r.apiHealthy(context.Background(), cluster); err == nil || !strings.Contains(err.Error(), "HTTP 503") {
+		t.Fatalf("apiHealthy error = %v, want HTTP 503", err)
+	}
+	if client.request == nil || client.request.URL.Path != "/readyz" {
+		t.Fatalf("health request = %v, want Cube readiness endpoint", client.request)
 	}
 }
 
@@ -181,4 +184,14 @@ func envValue(environment []corev1.EnvVar, name string) string {
 		}
 	}
 	return ""
+}
+
+type staticHTTPClient struct {
+	request  *http.Request
+	response *http.Response
+}
+
+func (c *staticHTTPClient) Do(request *http.Request) (*http.Response, error) {
+	c.request = request
+	return c.response, nil
 }

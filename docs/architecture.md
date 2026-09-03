@@ -45,8 +45,10 @@ It validates references, replica counts, storage shape, scratch quantity, and
 optional S3 credentials before creating workloads.
 
 The `Ready` condition is true only when expected API, refresh worker, and Cube
-Store replicas are ready. `status.endpoint` is the in-cluster API URL. API pods
-use Cube Core's unprefixed `/readyz` and `/livez` probes. Clients use the default
+Store replicas are ready and the operator receives a successful response from
+Cube Core's unauthenticated `/readyz` endpoint. `status.endpoint` is the
+in-cluster API URL. API pods use Cube Core's unprefixed `/readyz` and `/livez`
+probes. Authenticated clients use the default
 `/cubejs-api/v1/meta` and `/cubejs-api/v1/load` REST paths.
 
 ## Cube Store storage
@@ -65,6 +67,12 @@ Cube's production architecture is API instances + a refresh worker + Cube Store.
 Use clustered Cube Store with shared durable remote storage for significant
 production concurrency; the single-node mode exists for constrained workloads
 and the Kind demo.
+
+If Cube Store reports cache corruption (for example, a malformed `cachestore/CURRENT`),
+stop Cube workloads before recovery. Only when the affected cache is known to be
+disposable, remove that cache directory from the mounted storage and restart the
+workloads so Cube Store rebuilds it. Back up and investigate durable data first;
+never delete the PVC, bucket, or unrelated Cube Store data as an automated fix.
 
 ## Security boundary
 
