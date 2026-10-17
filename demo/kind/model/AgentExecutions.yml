@@ -1,0 +1,108 @@
+cubes:
+  - name: AgentExecutions
+    sql_table: public.agent_executions
+    description: Producer-reported completed execution spans; no prompts or private reasoning.
+    measures:
+      - name: count
+        type: count
+      - name: runs
+        type: count
+        filters:
+          - sql: "{CUBE}.kind = 'run'"
+      - name: failedRuns
+        type: count
+        filters:
+          - sql: "{CUBE}.kind = 'run' AND {CUBE}.status = 'failed'"
+      - name: failedValidations
+        type: count
+        filters:
+          - sql: "{CUBE}.kind = 'validation' AND {CUBE}.payload->>'validation' = 'failed'"
+      - name: averageRunDurationMs
+        sql: duration_ms
+        type: avg
+        filters:
+          - sql: "{CUBE}.kind = 'run'"
+      - name: inputTokens
+        sql: input_tokens
+        type: sum
+      - name: outputTokens
+        sql: output_tokens
+        type: sum
+      - name: costUsd
+        sql: cost_usd
+        type: sum
+    dimensions:
+      - name: eventId
+        sql: event_id
+        type: string
+        primary_key: true
+        public: true
+      - name: startedAt
+        sql: started_at
+        type: time
+      - name: endedAt
+        sql: ended_at
+        type: time
+      - name: recordedAt
+        sql: recorded_at
+        type: time
+      - name: tenantId
+        sql: tenant_id
+        type: string
+      - name: cluster
+        sql: cluster_name
+        type: string
+      - name: namespace
+        sql: namespace
+        type: string
+      - name: traceId
+        sql: trace_id
+        type: string
+      - name: runId
+        sql: run_id
+        type: string
+      - name: parentId
+        sql: parent_id
+        type: string
+      - name: agent
+        sql: agent_name
+        type: string
+      - name: kind
+        sql: kind
+        type: string
+      - name: name
+        sql: name
+        type: string
+      - name: status
+        sql: status
+        type: string
+      - name: durationMs
+        sql: duration_ms
+        type: number
+      - name: skillVersion
+        sql: "{CUBE}.payload->>'skillVersion'"
+        type: string
+      - name: tool
+        sql: "{CUBE}.payload->>'tool'"
+        type: string
+      - name: targetAgent
+        sql: "{CUBE}.payload->>'targetAgent'"
+        type: string
+      - name: artifactUri
+        sql: "{CUBE}.payload->>'artifactUri'"
+        type: string
+      - name: artifactType
+        sql: "{CUBE}.payload->>'artifactType'"
+        type: string
+      - name: validation
+        sql: "{CUBE}.payload->>'validation'"
+        type: string
+      - name: model
+        sql: "{CUBE}.payload->>'model'"
+        type: string
+      - name: provider
+        sql: "{CUBE}.payload->>'provider'"
+        type: string
+      - name: errorType
+        sql: "{CUBE}.payload->>'errorType'"
+        type: string

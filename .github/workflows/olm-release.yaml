@@ -2,30 +2,44 @@ name: Publish OLM release
 
 on:
   push:
-    tags: [v0.1.0]
+    tags: [v0.2.0]
   workflow_dispatch:
 
 concurrency:
-  group: olm-release-v0.1.0
+  group: olm-release-v0.2.0
   cancel-in-progress: false
 
 permissions:
   contents: read
 
 env:
-  VERSION: 0.1.0
+  VERSION: 0.2.0
   OPERATOR_SDK_VERSION: v1.42.3
   OPM_VERSION: v1.74.0
 
 jobs:
+  e2e:
+    uses: ./.github/workflows/e2e.yaml
+
   publish:
+    needs: e2e
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: [5432:5432]
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://postgres@localhost:5432/postgres?sslmode=disable
     permissions:
       contents: read
       packages: write
     outputs:
       controller: ${{ steps.controller.outputs.digest }}
+      kopf: ${{ steps.kopf.outputs.digest }}
       bundle: ${{ steps.bundle.outputs.digest }}
       catalog: ${{ steps.catalog.outputs.digest }}
       registry: ${{ steps.names.outputs.registry }}
@@ -39,7 +53,7 @@ jobs:
           go-version-file: go.mod
       - name: Test controller
         run: |
-          go test ./...
+          go test -race ./...
           go vet ./...
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -56,6 +70,18 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.names.outputs.registry }}/cube-operator:v${{ env.VERSION }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          sbom: true
+          provenance: mode=max
+      - name: Publish Kopf alternative
+        id: kopf
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: python/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.names.outputs.registry }}/cube-operator-kopf:v${{ env.VERSION }}
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
           sbom: true
           provenance: mode=max
@@ -112,21 +138,22 @@ jobs:
         env:
           REGISTRY: ${{ steps.names.outputs.registry }}
           CONTROLLER: ${{ steps.controller.outputs.digest }}
+          KOPF: ${{ steps.kopf.outputs.digest }}
           BUNDLE: ${{ steps.bundle.outputs.digest }}
           CATALOG: ${{ steps.catalog.outputs.digest }}
         run: |
-          printf '%s\n' "$REGISTRY/cube-operator@$CONTROLLER" "$REGISTRY/cube-operator-bundle@$BUNDLE" "$REGISTRY/cube-operator-catalog@$CATALOG" | tee dist/olm/images.txt
+          printf '%s\n' "$REGISTRY/cube-operator@$CONTROLLER" "$REGISTRY/cube-operator-kopf@$KOPF" "$REGISTRY/cube-operator-bundle@$BUNDLE" "$REGISTRY/cube-operator-catalog@$CATALOG" | tee dist/olm/images.txt
           sed "s|ghcr.io/sqe/cube-operator-catalog:v0.1.0|$REGISTRY/cube-operator-catalog@$CATALOG|" config/olm/install.yaml > dist/olm/install.yaml
           {
             echo '### Published OLM images'
             echo '```text'
             cat dist/olm/images.txt
             echo '```'
-            echo 'Set all three GHCR packages to public on first publication. The verify job checks anonymous pulls and OLM installation. Re-run that failed job after changing visibility; do not re-publish the images.'
+            echo 'Set all four GHCR packages to public on first publication. The verify job checks anonymous pulls and OLM installation. Re-run that failed job after changing visibility; do not re-publish the images.'
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
-          name: olm-release-v0.1.0
+          name: olm-release-v0.2.0
           path: dist/olm/
 
   verify:
@@ -136,16 +163,18 @@ jobs:
     env:
       REGISTRY: ${{ needs.publish.outputs.registry }}
       CONTROLLER: ${{ needs.publish.outputs.controller }}
+      KOPF: ${{ needs.publish.outputs.kopf }}
       BUNDLE: ${{ needs.publish.outputs.bundle }}
       CATALOG: ${{ needs.publish.outputs.catalog }}
     steps:
       - uses: actions/checkout@v4
       - name: Check anonymous pulls
         run: |
-          export DOCKER_CONFIG="$(mktemp -d)"
-          for image in "cube-operator@$CONTROLLER" "cube-operator-bundle@$BUNDLE" "cube-operator-catalog@$CATALOG"; do
+          DOCKER_CONFIG=$(mktemp -d)
+          export DOCKER_CONFIG
+          for image in "cube-operator@$CONTROLLER" "cube-operator-kopf@$KOPF" "cube-operator-bundle@$BUNDLE" "cube-operator-catalog@$CATALOG"; do
             if ! docker pull "$REGISTRY/$image"; then
-              echo "::error::Anonymous pull failed. Make all three GHCR packages public, then re-run this job."
+              echo "::error::Anonymous pull failed. Make all four GHCR packages public, then re-run this job."
               exit 1
             fi
           done
@@ -167,8 +196,8 @@ jobs:
           kind create cluster --name cube-olm --image kindest/node:v1.34.0
           operator-sdk olm install --version 0.46.0 --timeout 5m
           sed "s|ghcr.io/sqe/cube-operator-catalog:v0.1.0|$REGISTRY/cube-operator-catalog@$CATALOG|" config/olm/install.yaml | kubectl apply -f -
-          kubectl -n cube-system wait --for=create csv/cube-microk8s-operator.v0.1.0 --timeout=5m
-          kubectl -n cube-system wait --for=jsonpath='{.status.phase}'=Succeeded csv/cube-microk8s-operator.v0.1.0 --timeout=5m
+          kubectl -n cube-system wait --for=create "csv/cube-microk8s-operator.v$VERSION" --timeout=5m
+          kubectl -n cube-system wait --for=jsonpath='{.status.phase}'=Succeeded "csv/cube-microk8s-operator.v$VERSION" --timeout=5m
           kubectl -n cube-system rollout status deployment/cube-operator --timeout=2m
           test "$(kubectl -n cube-system get deployment cube-operator -o jsonpath='{.spec.template.spec.containers[0].image}')" = "$REGISTRY/cube-operator@$CONTROLLER"
       - name: Capture installation evidence
@@ -193,7 +222,7 @@ jobs:
 
   release:
     needs: [publish, verify]
-    if: github.ref == 'refs/tags/v0.1.0'
+    if: github.ref == 'refs/tags/v0.2.0'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -202,18 +231,19 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: olm-release-v0.1.0
+          name: olm-release-v0.2.0
           path: release-assets
       - name: Package verified OLM release
         run: |
-          tar -czf cube-operator-olm-v0.1.0.tar.gz -C release-assets bundle catalog catalog.Dockerfile images.txt install.yaml
+          tar -czf "cube-operator-olm-v$VERSION.tar.gz" -C release-assets bundle catalog catalog.Dockerfile images.txt install.yaml
           cp release-assets/images.txt .
           cp release-assets/install.yaml .
-          sha256sum cube-operator-olm-v0.1.0.tar.gz images.txt install.yaml > SHA256SUMS
+          sha256sum "cube-operator-olm-v$VERSION.tar.gz" images.txt install.yaml > SHA256SUMS
           {
-            echo 'Initial alpha release of the Cube Core Go operator. The published catalog passed anonymous pull and clean Kind/OLM installation checks.'
+            echo 'Alpha release with agent-execution telemetry: completed agent runs, skills, tools, handoffs, artifact references, validations, and model usage. Go and Kopf Kind E2E checks passed before publication; the published catalog passed anonymous pull and clean Kind/OLM installation checks.'
             echo
             echo 'With classic OLM installed on Kubernetes 1.34+, apply the attached install.yaml, then configure Cube Core using the repository README. Do not run Go and Kopf controllers together.'
+            echo 'This is a separate single-version catalog for fresh installs, not an automatic v0.1.0 upgrade. Agent ingestion is an optional demo/standalone process, not an automatically deployed OLM component. See docs/agent-executions.md for instrumentation and security limits.'
             echo
             echo '### Published images'
             echo '```text'
@@ -226,6 +256,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create v0.1.0 --verify-tag --prerelease \
-            --title 'Cube Core Operator v0.1.0' --generate-notes --notes-file release-notes.md \
-            cube-operator-olm-v0.1.0.tar.gz images.txt install.yaml SHA256SUMS
+          gh release create "v$VERSION" --verify-tag --prerelease \
+            --title "Cube Core Operator v$VERSION" --generate-notes --notes-file release-notes.md \
+            "cube-operator-olm-v$VERSION.tar.gz" images.txt install.yaml SHA256SUMS

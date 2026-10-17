@@ -91,13 +91,46 @@ flowchart LR
   API --> S{All expected<br/>replicas ready?}
   REF --> S
   STORE --> S
-  S -->|yes| T[Ready=True]
+  S -->|yes| Health{Cube API /readyz healthy?}
+  Health -->|yes| T[Ready=True]
+  Health -->|no| Unhealthy[Ready=False<br/>APIHealthCheckFailed]
   S -->|no| P[Ready=False<br/>Progressing]
   CR -. ownerReference / GC .-> API
   CR -. ownerReference / GC .-> REF
   CR -. ownerReference / GC .-> STORE
   CR -. ownerReference / GC .-> NP
 ```
+
+### Controller anatomy and optional telemetry
+
+The Go image has three independent entrypoints. Only the manager reconciles
+`CubeCluster` resources; telemetry processes do not run inside reconciliation.
+
+```mermaid
+flowchart TB
+  Binary[Go operator image] --> Manager[Default: controller-runtime manager]
+  Binary --> Collector[telemetry-collector command]
+  Binary --> Ingest[agent-ingest command]
+  Kopf[Separate Kopf image<br/>one standalone replica] -. alternative to manager .-> Reconcile
+  Manager --> Lease[Kubernetes Lease leader election]
+  Lease --> Watch[Watch CubeClusters and owned workloads]
+  Watch --> Reconcile[Validate references and desired topology]
+  Reconcile --> Apply[Apply workloads and remove obsolete store topology]
+  Apply --> Ready[Check replicas and Cube readiness<br/>update status and endpoint]
+  Ready -. workload changes .-> Watch
+  Collector -->|read-only Kubernetes API| Snapshots[Node and Pod snapshots]
+  Snapshots --> PG[(PostgreSQL)]
+  Producers[Instrumented agents] -->|separate ingestion token| Ingest
+  Ingest --> Validate[Validate completed spans<br/>deduplicate event IDs]
+  Validate --> PG
+  Models[Demo model ConfigMap<br/>KubernetesTelemetry + AgentExecutions] --> Cube[Operator-managed Cube Core]
+  PG --> Cube
+  Cube -->|metadata and semantic queries| Clients[Clients with Cube JWT]
+```
+
+The demo supplies PostgreSQL, ingestion, collector, models, and credentials;
+OLM installs the controller, not this optional telemetry stack. See
+[agent-execution records and examples](docs/agent-executions.md).
 
 ### Cube query and refresh data flow
 
@@ -156,20 +189,27 @@ building or publishing anything yourself. The local tags above identify your
 own builds; only custom builds need publishing to your registry before use
 outside Kind.
 
-### GitHub CI, packages, and releases
+### Automated verification and packages
 
-- Pull requests run repository verification and build both Go and Kopf images
-  for amd64/arm64 without publishing.
-- Pushes to `main` run the same checks and publish development packages
-  `ghcr.io/sqe/cube-operator` and `ghcr.io/sqe/cube-operator-kopf`, tagged `edge`
-  and `sha-<full-commit>`. These are development builds, not OLM releases.
-- Pushing `v0.1.0` runs the OLM release workflow. After public-image and OLM
-  installation verification succeeds, it creates a GitHub prerelease with
-  the bundle/catalog archive, digest-pinned `install.yaml`, image digests,
-  and checksums. Manual OLM runs publish/test images but do not create a release.
+CI runs Go/Python checks, PostgreSQL-backed ingestion tests, and Kind E2E tests
+for both controllers, including repeated setup and ingestion pod replacement.
+Images are built for amd64/arm64. Development images are available as
+`ghcr.io/sqe/cube-operator:edge` and `ghcr.io/sqe/cube-operator-kopf:edge`;
+use a versioned release for reproducible installations rather than a moving tag.
+The agent-execution feature requires a build from these changes until its next
+release is published; the existing v0.1.0 release does not include it.
 
-See the [release guide](docs/olm-release.md) for first-time GHCR visibility
-setup. No personal registry token is needed by these workflows.
+```mermaid
+flowchart LR
+  Source[PR or main] --> Checks[Go and Python checks<br/>PostgreSQL tests + race detector<br/>workflow lint]
+  Checks --> E2E[Kind matrix: Go and Kopf<br/>real ingestion to Cube queries<br/>pod replacement + repeated setup]
+  E2E --> Builds[amd64 and arm64 builds]
+  Builds --> Dev[Main only: development packages]
+  Tag[Next release: v0.2.0 tag] --> ReleaseE2E[Same Go and Kopf E2E gates]
+  ReleaseE2E --> Published[Versioned Go and Kopf images<br/>Go OLM bundle and catalog]
+  Published --> OLM[Anonymous pulls and clean OLM installation]
+  OLM --> Release[GitHub alpha prerelease<br/>digests + install manifest + checksums]
+```
 
 ## Deploy or switch controllers
 
@@ -327,13 +367,21 @@ spec:
 
 ## Kind telemetry demo
 
-The disposable demo samples Kubernetes Nodes and Pods, writes observations to
-PostgreSQL, and queries them through Cube Core.
+The disposable demo samples Kubernetes Nodes and Pods and accepts agent-execution
+telemetry through a separate authenticated ingestion service. Both are stored in
+PostgreSQL and queried through Cube Core. The `AgentExecutions` model covers
+agent runs, versioned skills, tool calls, handoffs, artifact references, validation
+outcomes, and model/token/cost usage. Agents must emit their own execution records;
+the operator does not inspect agents or collect private reasoning.
+
+See [the agent-execution contract and examples](docs/agent-executions.md).
 
 ```mermaid
 flowchart LR
   KAPI[Kubernetes API] -->|read-only list Nodes/Pods| Collector[Telemetry collector]
   Collector -->|COPY observations| PG[(PostgreSQL)]
+  Agents[Instrumented agents] -->|completed spans + ingestion token| Ingest[Agent ingestion service]
+  Ingest -->|validated records| PG
   Model[Generated model ConfigMap] --> Cube[Cube API]
   PG --> Cube
   Cube --> Store[Single Cube Store + PVC]
@@ -359,6 +407,9 @@ make kind-down
 
 `kind-e2e` verifies `/readyz`, `/livez`, `/cubejs-api/v1/meta`, and
 `POST /cubejs-api/v1/load`, including bounded retries for `Continue wait`.
+It also submits a synthetic multi-agent execution and verifies its linked records,
+exact usage/cost and outcome aggregates, ingestion authentication, validation,
+and replay safety. No Temporal or Kafka service is required.
 Port 4000 is bound locally for the lifetime of the Kind cluster.
 
 ## Use the Cube Core REST API
@@ -423,6 +474,16 @@ flowchart LR
 ```
 
 ## Agent integrations
+
+### Agent-execution telemetry
+
+Instrument your agents to send completed spans to `POST /v1/executions` on the
+optional `agent-ingest` service. Query `AgentExecutions` through Cube to see which
+agents ran, which skills/tools they used, delegation, artifact references,
+validation results, latency, and reported token/cost usage. This is separate from
+the read-only Cube skill below. See [setup, schema, and queries](docs/agent-executions.md).
+The shared-token Kind demo is not a multi-tenant authorization system; OIDC and
+tenant enforcement must be configured separately before external use.
 
 ### Local self-hosted Cube Core skill
 
@@ -544,12 +605,9 @@ confirmed anonymous pulls and installation through the catalog on a clean
 Kubernetes 1.34 cluster with OLM 0.46: the CSV reached `Succeeded` and the
 controller became ready. Follow the OLM installation steps below.
 
-**OperatorHub listing:** [draft submission #9651](https://github.com/k8s-operatorhub/community-operators/pull/9651)
+**OperatorHub listing:** [submission #9651](https://github.com/k8s-operatorhub/community-operators/pull/9651)
 is open; the listing is not available until community review, acceptance, and
 catalog ingestion complete. The OLM catalog installation already works.
-
-Release engineering and community submission details are documented separately
-in the [maintainer release guide](docs/olm-release.md).
 
 ### OLM catalog installation
 
@@ -599,8 +657,8 @@ For installation failures, inspect `kubectl -n olm get catalogsource,pods` and
 
 ### OperatorHub installation
 
-**Submission in progress:** [draft PR #9651](https://github.com/k8s-operatorhub/community-operators/pull/9651)
-contains the initial package. It is not an accepted OperatorHub listing yet.
+**Submission in progress:** [PR #9651](https://github.com/k8s-operatorhub/community-operators/pull/9651)
+is ready for community CI and review. It is not an accepted OperatorHub listing yet.
 Once the community submission is accepted and appears in the public
 catalog, find **Cube Core Operator** on [OperatorHub.io](https://operatorhub.io),
 select **Install**, and follow that listing's generated commands. Use the

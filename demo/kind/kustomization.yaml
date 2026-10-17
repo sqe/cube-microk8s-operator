@@ -5,10 +5,12 @@ resources:
   - namespace.yaml
   - postgres/postgres.yaml
   - telemetry/collector.yaml
+  - telemetry/agent-ingest.yaml
   - cube.yaml
 configMapGenerator:
   - name: cube-model
     files:
       - KubernetesTelemetry.yml=model/KubernetesTelemetry.yml
+      - AgentExecutions.yml=model/AgentExecutions.yml
 generatorOptions:
   disableNameSuffixHash: true

@@ -2,20 +2,41 @@
 
 ## Runtime topology
 
-```text
-REST client ──▶ Service :4000 ──▶ Cube API Deployment (1..n)
-                                      │
-PostgreSQL ◀── telemetry collector    ├──▶ PostgreSQL telemetry table
-     ▲                                └──▶ Cube Store :3030
-     │                                           │
-Kubernetes API (nodes, pods)          refresh worker ──▶ pre-aggregations
-                                                  │
-                                    local PVC (demo) or shared S3 (production)
+```mermaid
+flowchart TB
+  CR[CubeCluster + model/configuration references] --> Controller[Go or Kopf controller<br/>one implementation at a time]
+  subgraph Managed[Operator-managed Cube topology]
+    API[Cube API Deployment and Service :4000]
+    Refresh[Refresh worker]
+    Store[Single Cube Store or router and workers]
+    Guard[API PDB and Cube Store NetworkPolicy]
+  end
+  Controller --> API
+  Controller --> Refresh
+  Controller --> Store
+  Controller --> Guard
+  subgraph Demo[Optional demo data pipeline, not reconciled by the operator]
+    Kube[Kubernetes API] --> Collector[Read-only telemetry collector]
+    Agent[Instrumented agent runtimes] --> Ingest[Authenticated agent-ingest service]
+    Collector --> DB[(PostgreSQL<br/>Kubernetes observations + completed execution spans)]
+    Ingest --> DB
+  end
+  Client[Client with Cube JWT] --> API
+  API --> DB
+  Refresh --> DB
+  API --> Store
+  Refresh --> Store
+  Store --> Remote[Existing PVC or S3 remote storage]
 ```
 
 The demo collector lists nodes and pods using read-only RBAC, records timestamped
 health observations in PostgreSQL, and prunes records after its configured
 retention. Cube's YAML model maps that table to dimensions and measures.
+The separate ingestion process validates completed agent-execution spans,
+persists immutable records with retry deduplication, and prunes expired spans.
+`AgentExecutions` exposes run/skill/tool/handoff/artifact/validation/model-call
+details, outcomes, latency, and reported usage. See
+[execution anatomy and security limits](agent-executions.md).
 
 ## Controller contract
 

@@ -34,10 +34,12 @@ if [[ "$CONTROLLER" == "kopf" ]]; then
   kind load docker-image --name "$CLUSTER_NAME" "$KOPF_IMAGE"
   kubectl --context "$CONTEXT" -n cube-system delete deployment cube-operator --ignore-not-found
   kubectl --context "$CONTEXT" apply -k "$ROOT_DIR/config/kopf"
+  kubectl --context "$CONTEXT" -n cube-system rollout restart deployment/cube-operator-kopf
   kubectl --context "$CONTEXT" -n cube-system rollout status deployment/cube-operator-kopf --timeout=5m
 else
   kubectl --context "$CONTEXT" -n cube-system delete deployment cube-operator-kopf --ignore-not-found
   kubectl --context "$CONTEXT" apply -k "$ROOT_DIR/config/default"
+  kubectl --context "$CONTEXT" -n cube-system rollout restart deployment/cube-operator
   kubectl --context "$CONTEXT" -n cube-system rollout status deployment/cube-operator --timeout=5m
 fi
 
@@ -57,7 +59,13 @@ postgres_password=$(secret_value postgres POSTGRES_PASSWORD)
 [[ -n "$postgres_password" ]] || postgres_password=$(random_hex)
 api_secret=$(secret_value cube-configuration CUBEJS_API_SECRET)
 [[ -n "$api_secret" ]] || api_secret=$(random_hex)
+ingest_token=$(secret_value agent-ingest token)
+[[ -n "$ingest_token" ]] || ingest_token=$(random_hex)
 database_url="postgres://cube:${postgres_password}@postgres:5432/telemetry?sslmode=disable"
+
+kubectl --context "$CONTEXT" -n cube-demo create secret generic agent-ingest \
+  --from-literal=token="$ingest_token" \
+  --dry-run=client -o yaml | kubectl --context "$CONTEXT" apply -f -
 
 kubectl --context "$CONTEXT" -n cube-demo create secret generic postgres \
   --from-literal=POSTGRES_DB=telemetry \
@@ -95,6 +103,15 @@ kubectl --context "$CONTEXT" -n cube-demo patch cubecluster telemetry --type=mer
 echo "Selected digest-pinned Cube Store image for $node_architecture."
 kubectl --context "$CONTEXT" -n cube-demo rollout status statefulset/postgres --timeout=5m
 kubectl --context "$CONTEXT" -n cube-demo rollout status deployment/telemetry-collector --timeout=5m
+kubectl --context "$CONTEXT" -n cube-demo rollout status deployment/agent-ingest --timeout=5m
+# Reused clusters need new pods: Go copies model files at startup, and local
+# image tags are intentionally reused by this disposable demo.
+kubectl --context "$CONTEXT" -n cube-demo wait --for=create deployment/telemetry-api --timeout=5m
+kubectl --context "$CONTEXT" -n cube-demo wait --for=create deployment/telemetry-refresh-worker --timeout=5m
+kubectl --context "$CONTEXT" -n cube-demo rollout restart deployment/telemetry-api deployment/telemetry-refresh-worker deployment/telemetry-collector deployment/agent-ingest
+kubectl --context "$CONTEXT" -n cube-demo rollout status deployment/telemetry-api --timeout=5m
+kubectl --context "$CONTEXT" -n cube-demo rollout status deployment/telemetry-refresh-worker --timeout=5m
+kubectl --context "$CONTEXT" -n cube-demo rollout status deployment/agent-ingest --timeout=5m
 kubectl --context "$CONTEXT" -n cube-demo wait --for=condition=Ready cubecluster/telemetry --timeout=15m
 
 echo "Cube Core demo is ready at http://127.0.0.1:4000 (local machine only)."

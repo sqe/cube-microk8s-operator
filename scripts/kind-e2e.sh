@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 CLUSTER_NAME=${CLUSTER_NAME:-cube-demo}
 CONTEXT="kind-$CLUSTER_NAME"
 CUBE_URL=${CUBE_URL:-http://127.0.0.1:4000}
@@ -50,8 +51,7 @@ for attempt in $(seq 1 30); do
   if [[ "$code" == 200 ]] && jq -e '.data[0]["KubernetesTelemetry.count"] | tonumber > 0' "$response_file" >/dev/null 2>&1; then
     count=$(jq -r '.data[0]["KubernetesTelemetry.count"]' "$response_file")
     echo "/cubejs-api/v1/load: returned $count Kubernetes telemetry observations"
-    echo "Kind end-to-end demo passed."
-    exit 0
+    break
   fi
   if jq -e '.error == "Continue wait"' "$response_file" >/dev/null 2>&1; then
     echo "Cube requested Continue wait ($attempt/30)."
@@ -63,6 +63,38 @@ for attempt in $(seq 1 30); do
   exit 1
 done
 
-echo "Cube query did not return telemetry data after 30 attempts." >&2
-cat "$response_file" >&2
-exit 1
+if [[ "$attempt" == 30 ]] && ! jq -e '.data[0]["KubernetesTelemetry.count"] | tonumber > 0' "$response_file" >/dev/null 2>&1; then
+  echo "Cube query did not return telemetry data after 30 attempts." >&2
+  cat "$response_file" >&2
+  exit 1
+fi
+
+forward_log=$(mktemp)
+event_file=$(mktemp)
+kubectl --context "$CONTEXT" -n cube-demo port-forward --address 127.0.0.1 service/agent-ingest :8082 >"$forward_log" 2>&1 &
+forward_pid=$!
+trap 'kill "$forward_pid" 2>/dev/null || true; wait "$forward_pid" 2>/dev/null || true; rm -f "$response_file" "$forward_log" "$event_file"' EXIT
+for _ in $(seq 1 50); do
+  grep -q 'Forwarding from' "$forward_log" && break
+  sleep 0.2
+done
+ingest_port=$(sed -n 's/.*127.0.0.1:\([0-9]*\) ->.*/\1/p' "$forward_log" | head -1)
+[[ -n "$ingest_port" ]] || { cat "$forward_log" >&2; exit 1; }
+ingest_token=$(kubectl --context "$CONTEXT" -n cube-demo get secret agent-ingest \
+  -o 'go-template={{index .data "token" | base64decode}}')
+AGENT_INGEST_URL="http://127.0.0.1:$ingest_port" AGENT_INGEST_TOKEN="$ingest_token" \
+  AGENT_EVENT_FILE="$event_file" CUBE_CORE_URL="$CUBE_URL" CUBE_CORE_TOKEN="$token" python3 "$ROOT_DIR/demo/agent-executions.py"
+# A pod replacement must retain persisted records and replay protection.
+kill "$forward_pid"
+wait "$forward_pid" 2>/dev/null || true
+kubectl --context "$CONTEXT" -n cube-demo rollout restart deployment/agent-ingest
+kubectl --context "$CONTEXT" -n cube-demo rollout status deployment/agent-ingest --timeout=2m
+kubectl --context "$CONTEXT" -n cube-demo port-forward --address 127.0.0.1 service/agent-ingest "$ingest_port:8082" >"$forward_log" 2>&1 &
+forward_pid=$!
+for _ in $(seq 1 50); do
+  grep -q 'Forwarding from' "$forward_log" && break
+  sleep 0.2
+done
+AGENT_INGEST_URL="http://127.0.0.1:$ingest_port" AGENT_INGEST_TOKEN="$ingest_token" \
+  AGENT_EVENT_FILE="$event_file" CUBE_CORE_URL="$CUBE_URL" CUBE_CORE_TOKEN="$token" python3 "$ROOT_DIR/demo/agent-executions.py"
+echo "Kind end-to-end demo passed: Kubernetes observations and agent execution telemetry."
