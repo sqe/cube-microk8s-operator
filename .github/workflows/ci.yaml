@@ -38,14 +38,13 @@ jobs:
           python-version: '3.13'
       - name: Install validation tools
         run: |
-          python -m pip install PyYAML==6.0.3
+          python -m pip install PyYAML==6.0.3 pre-commit==4.7.0
           go install sigs.k8s.io/kustomize/kustomize/v5@v5.7.1
-          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
       - name: Verify repository
         run: |
+          pre-commit run --all-files
           make verify
           go test -race ./...
-          actionlint
 
   e2e:
     needs: test

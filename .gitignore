@@ -11,3 +11,4 @@ kubeconfig
 *.bak
 .DS_Store
 /dist/olm/
+/.venv/

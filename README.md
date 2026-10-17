@@ -163,6 +163,10 @@ sequenceDiagram
 
 ## Build and verify
 
+See [Contributing and collaborating](CONTRIBUTING.md) for local Git hook setup,
+controller parity, pull request checks, and CI troubleshooting. CI runs the same
+pre-commit checks as local commits, including workflow lint with ShellCheck.
+
 Prerequisites:
 
 - Go 1.24+, Python 3 with PyYAML, Kustomize, and Terraform 1.7+.

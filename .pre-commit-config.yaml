@@ -1,0 +1,33 @@
+minimum_pre_commit_version: '4.0.0'
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-merge-conflict
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+  - repo: local
+    hooks:
+      - id: actionlint
+        name: GitHub Actions lint (including ShellCheck)
+        entry: actionlint
+        language: python
+        additional_dependencies:
+          - actionlint-py==1.7.7.24
+          - shellcheck-py==0.11.0.1
+        files: ^(\.github/workflows/.*\.ya?ml|\.pre-commit-config\.yaml)$
+        pass_filenames: false
+      - id: shellcheck
+        name: Shell script lint
+        entry: shellcheck
+        language: python
+        additional_dependencies: [shellcheck-py==0.11.0.1]
+        files: ^scripts/.*\.sh$
+      - id: kopf-tests
+        name: Kopf resource tests
+        entry: env PYTHONPATH=python python -B -m unittest discover -s python/tests -v
+        language: python
+        additional_dependencies: [PyYAML==6.0.3]
+        files: ^python/.*\.py$
+        pass_filenames: false

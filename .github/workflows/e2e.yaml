@@ -55,7 +55,7 @@ jobs:
         run: |
           curl --verbose --connect-timeout 5 --max-time 10 http://127.0.0.1:4000/readyz > evidence/host-health.txt 2>&1 || true
           docker port cube-demo-control-plane > evidence/port-mapping.txt 2>&1 || true
-          kubectl --context kind-cube-demo -n cube-demo exec deployment/telemetry-api -c api -- node -e '
+          kubectl --context kind-cube-demo -n cube-demo exec -i deployment/telemetry-api -c api -- node > evidence/in-cluster-health.txt 2>&1 <<'JS' || true
             Promise.all(["127.0.0.1", "telemetry-api"].map(async host => {
               const url = `http://${host}:4000/readyz`;
               try {
@@ -66,7 +66,7 @@ jobs:
                 process.exitCode = 1;
               }
             }));
-          ' > evidence/in-cluster-health.txt 2>&1 || true
+          JS
       - uses: actions/upload-artifact@v4
         if: always()
         with:
