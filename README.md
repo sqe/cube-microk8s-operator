@@ -152,6 +152,21 @@ All upstream runtime images are versioned and digest-pinned. Local operator
 tags identify builds from this tree; publish them to a trusted registry and set
 the corresponding Kustomize image before deploying outside Kind.
 
+### GitHub CI, packages, and releases
+
+- Pull requests run repository verification and build both Go and Kopf images
+  for amd64/arm64 without publishing.
+- Pushes to `main` run the same checks and publish development packages
+  `ghcr.io/sqe/cube-operator` and `ghcr.io/sqe/cube-operator-kopf`, tagged `edge`
+  and `sha-<full-commit>`. These are development builds, not OLM releases.
+- Pushing `v0.1.0` runs the OLM release workflow. After public-image and OLM
+  installation verification succeeds, it creates a GitHub prerelease with
+  the bundle/catalog archive, digest-pinned `install.yaml`, image digests,
+  and checksums. Manual OLM runs publish/test images but do not create a release.
+
+See the [release guide](docs/olm-release.md) for first-time GHCR visibility
+setup. No personal registry token is needed by these workflows.
+
 ## Deploy or switch controllers
 
 ### Deploy Go (default)

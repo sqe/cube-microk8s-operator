@@ -116,6 +116,7 @@ jobs:
           CATALOG: ${{ steps.catalog.outputs.digest }}
         run: |
           printf '%s\n' "$REGISTRY/cube-operator@$CONTROLLER" "$REGISTRY/cube-operator-bundle@$BUNDLE" "$REGISTRY/cube-operator-catalog@$CATALOG" | tee dist/olm/images.txt
+          sed "s|ghcr.io/sqe/cube-operator-catalog:v0.1.0|$REGISTRY/cube-operator-catalog@$CATALOG|" config/olm/install.yaml > dist/olm/install.yaml
           {
             echo '### Published OLM images'
             echo '```text'
@@ -189,3 +190,42 @@ jobs:
       - name: Clean up test cluster
         if: always()
         run: kind delete cluster --name cube-olm
+
+  release:
+    needs: [publish, verify]
+    if: github.ref == 'refs/tags/v0.1.0'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: olm-release-v0.1.0
+          path: release-assets
+      - name: Package verified OLM release
+        run: |
+          tar -czf cube-operator-olm-v0.1.0.tar.gz -C release-assets bundle catalog catalog.Dockerfile images.txt install.yaml
+          cp release-assets/images.txt .
+          cp release-assets/install.yaml .
+          sha256sum cube-operator-olm-v0.1.0.tar.gz images.txt install.yaml > SHA256SUMS
+          {
+            echo 'Initial alpha release of the Cube Core Go operator. The published catalog passed anonymous pull and clean Kind/OLM installation checks.'
+            echo
+            echo 'With classic OLM installed on Kubernetes 1.34+, apply the attached install.yaml, then configure Cube Core using the repository README. Do not run Go and Kopf controllers together.'
+            echo
+            echo '### Published images'
+            echo '```text'
+            cat images.txt
+            echo '```'
+            echo
+            echo 'Uses upstream [Cube](https://github.com/cube-js/cube): Cube Client is MIT licensed; Cube Backend is Apache 2.0 licensed. See README attribution. This release is not an OperatorHub listing.'
+          } > release-notes.md
+      - name: Create GitHub prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create v0.1.0 --verify-tag --prerelease \
+            --title 'Cube Core Operator v0.1.0' --generate-notes --notes-file release-notes.md \
+            cube-operator-olm-v0.1.0.tar.gz images.txt install.yaml SHA256SUMS

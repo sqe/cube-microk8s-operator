@@ -18,6 +18,18 @@ and catalog images, validates the bundle/catalog, pins controller and bundle
 references by digest, and attaches SBOM/provenance attestations. Image digests
 and generated packaging are saved as the `olm-release-v0.1.0` Actions artifact.
 
+For a `v0.1.0` tag run, a final job creates a GitHub **prerelease** only after
+the verify job succeeds. Downloadable assets include the OLM archive,
+digest-pinned `install.yaml`, `images.txt`, and `SHA256SUMS`. Manual runs do not
+create a GitHub release. Include the workflow changes in the tagged commit;
+an already-running workflow continues using its original code.
+
+The separate **CI and development packages** workflow verifies PRs and `main`,
+builds Go and Kopf images for both architectures, and publishes only from
+`main` using `edge` and `sha-<full-commit>` tags. It never overwrites the OLM
+workflow's version tags. All first-time GHCR packages, including the optional
+Kopf package, need public visibility if users should pull them anonymously.
+
 **One-time GHCR setup:** packages may initially be private. After the publish
 job finishes, make `cube-operator`, `cube-operator-bundle`, and
 `cube-operator-catalog` public in their GitHub package settings. The separate
