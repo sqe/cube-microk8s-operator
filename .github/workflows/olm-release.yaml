@@ -2,18 +2,18 @@ name: Publish OLM release
 
 on:
   push:
-    tags: [v0.2.0]
+    tags: [v0.2.1]
   workflow_dispatch:
 
 concurrency:
-  group: olm-release-v0.2.0
+  group: olm-release-v0.2.1
   cancel-in-progress: false
 
 permissions:
   contents: read
 
 env:
-  VERSION: 0.2.0
+  VERSION: 0.2.1
   OPERATOR_SDK_VERSION: v1.42.3
   OPM_VERSION: v1.74.0
 
@@ -143,7 +143,17 @@ jobs:
           CATALOG: ${{ steps.catalog.outputs.digest }}
         run: |
           printf '%s\n' "$REGISTRY/cube-operator@$CONTROLLER" "$REGISTRY/cube-operator-kopf@$KOPF" "$REGISTRY/cube-operator-bundle@$BUNDLE" "$REGISTRY/cube-operator-catalog@$CATALOG" | tee dist/olm/images.txt
-          sed "s|ghcr.io/sqe/cube-operator-catalog:v0.1.0|$REGISTRY/cube-operator-catalog@$CATALOG|" config/olm/install.yaml > dist/olm/install.yaml
+          sed -e "s|ghcr.io/sqe/cube-operator-catalog:v0.1.0|$REGISTRY/cube-operator-catalog@$CATALOG|" \
+            -e "s|cube-microk8s-operator.v0.1.0|cube-microk8s-operator.v$VERSION|" \
+            config/olm/install.yaml > dist/olm/install.yaml
+          python3 - <<'PY'
+          from pathlib import Path
+          import yaml
+          install = list(yaml.safe_load_all(Path("dist/olm/install.yaml").read_text()))
+          subscription = next(doc for doc in install if doc["kind"] == "Subscription")
+          csv = yaml.safe_load(Path("dist/olm/bundle/manifests/cube-microk8s-operator.clusterserviceversion.yaml").read_text())
+          assert subscription["spec"]["startingCSV"] == csv["metadata"]["name"], "Subscription must request the bundled CSV"
+          PY
           {
             echo '### Published OLM images'
             echo '```text'
@@ -153,7 +163,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
-          name: olm-release-v0.2.0
+          name: olm-release-v0.2.1
           path: dist/olm/
 
   verify:
@@ -190,12 +200,16 @@ jobs:
           curl -fsSL https://kind.sigs.k8s.io/dl/v0.30.0/kind-linux-amd64.sha256sum | sed 's/kind-linux-amd64/kind/' > "$RUNNER_TEMP/olm-tools/kind-checksums.txt"
           (cd "$RUNNER_TEMP/olm-tools" && sha256sum -c kind-checksums.txt)
           chmod +x "$RUNNER_TEMP/olm-tools/kind"
+      - uses: actions/download-artifact@v4
+        with:
+          name: olm-release-v0.2.1
+          path: dist/olm
       - name: Install through OLM
         run: |
           export KUBECONFIG="$RUNNER_TEMP/olm-kubeconfig"
           kind create cluster --name cube-olm --image kindest/node:v1.34.0
           operator-sdk olm install --version 0.46.0 --timeout 5m
-          sed "s|ghcr.io/sqe/cube-operator-catalog:v0.1.0|$REGISTRY/cube-operator-catalog@$CATALOG|" config/olm/install.yaml | kubectl apply -f -
+          kubectl apply -f dist/olm/install.yaml
           kubectl -n cube-system wait --for=create "csv/cube-microk8s-operator.v$VERSION" --timeout=5m
           kubectl -n cube-system wait --for=jsonpath='{.status.phase}'=Succeeded "csv/cube-microk8s-operator.v$VERSION" --timeout=5m
           kubectl -n cube-system rollout status deployment/cube-operator --timeout=2m
@@ -222,7 +236,7 @@ jobs:
 
   release:
     needs: [publish, verify]
-    if: github.ref == 'refs/tags/v0.2.0'
+    if: github.ref == 'refs/tags/v0.2.1'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -231,7 +245,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: olm-release-v0.2.0
+          name: olm-release-v0.2.1
           path: release-assets
       - name: Package verified OLM release
         run: |
