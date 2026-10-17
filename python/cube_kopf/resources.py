@@ -103,9 +103,23 @@ def deployment(name, namespace, spec, component, workload):
                 "metadata": {"labels": match_labels},
                 "spec": {
                     "securityContext": pod_security_context(),
+                    "initContainers": [
+                        {
+                            "name": "model-loader",
+                            "image": spec.get("image") or DEFAULT_CUBE_IMAGE,
+                            "imagePullPolicy": spec.get("imagePullPolicy") or "IfNotPresent",
+                            "command": ["sh", "-c", "cp -L /model-source/* /cube-model/"],
+                            "securityContext": container_security_context(),
+                            "volumeMounts": [
+                                {"name": "model-source", "mountPath": "/model-source", "readOnly": True},
+                                {"name": "model", "mountPath": "/cube-model"},
+                            ],
+                        }
+                    ],
                     "containers": [cube_container(name, spec, component, workload)],
                     "volumes": [
-                        {"name": "model", "configMap": {"name": spec["modelConfigMap"]}}
+                        {"name": "model-source", "configMap": {"name": spec["modelConfigMap"]}},
+                        {"name": "model", "emptyDir": {}},
                     ],
                 },
             },
