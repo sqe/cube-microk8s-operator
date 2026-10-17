@@ -12,5 +12,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldfl
 
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 COPY --from=builder /manager /manager
+COPY LICENSE NOTICE /licenses/
+LABEL org.opencontainers.image.licenses=Apache-2.0
 USER 65532:65532
 ENTRYPOINT ["/manager"]

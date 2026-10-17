@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="Independent Cube Core operator: cube with connected nodes">
+  <rect width="256" height="256" rx="40" fill="#10243a"/>
+  <g fill="none" stroke="#54d6c5" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M128 30v26M42 178l24-14M214 178l-24-14"/>
+    <circle cx="128" cy="28" r="10" fill="#10243a"/>
+    <circle cx="38" cy="180" r="10" fill="#10243a"/>
+    <circle cx="218" cy="180" r="10" fill="#10243a"/>
+  </g>
+  <path d="m128 58 64 37v74l-64 37-64-37V95z" fill="#193c58" stroke="#eef8ff" stroke-width="8" stroke-linejoin="round"/>
+  <path d="m64 95 64 37 64-37M128 132v74" fill="none" stroke="#eef8ff" stroke-width="8" stroke-linejoin="round"/>
+</svg>

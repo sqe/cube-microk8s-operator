@@ -6,5 +6,7 @@ WORKDIR /app
 COPY python/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir --disable-pip-version-check -r requirements.txt
 COPY python/cube_kopf/ ./cube_kopf/
+COPY LICENSE NOTICE /licenses/
+LABEL org.opencontainers.image.licenses=Apache-2.0
 USER 65532:65532
 ENTRYPOINT ["kopf", "run", "--standalone", "--all-namespaces", "--liveness=http://0.0.0.0:8081/healthz", "-m", "cube_kopf.controller"]

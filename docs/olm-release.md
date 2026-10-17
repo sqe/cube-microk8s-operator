@@ -147,21 +147,29 @@ status. Do not mark OperatorHub available based on this custom catalog test.
 
 ## Submit to OperatorHub.io
 
+The initial [draft submission PR #9651](https://github.com/k8s-operatorhub/community-operators/pull/9651)
+is open. Push the source repository's Apache-2.0 license, NOTICE, metadata, and
+README changes before marking it ready for community review. A draft PR is
+not an accepted listing.
+
 Follow the current contribution requirements in
 [`k8s-operatorhub/community-operators`](https://github.com/k8s-operatorhub/community-operators).
 Copy the generated `manifests/` and `metadata/` directories into
 `operators/cube-microk8s-operator/0.1.0/` in a fork. Before submission:
 
-1. Add the project's approved icon and a maintainer contact email to the CSV;
-   the generator intentionally does not invent a contact or brand asset.
-2. Resolve the project's licensing explicitly. The repository currently has no
-   license file for the operator's own code; choose and add an appropriate
-   open-source license before presenting the bundle for community distribution.
+1. Review the generated CSV's independent operator icon, description, resource
+   descriptors, and maintainer contact: Aziz Kurbanov, `azizbek@gmail.com`.
+2. Keep the operator's Apache-2.0 [LICENSE](../LICENSE) and [NOTICE](../NOTICE)
+   with redistributed operator code and images.
    Preserve the [Cube attribution and upstream license references](../README.md#upstream-attribution-and-licensing).
    Cube Client's MIT license and Cube Backend's Apache 2.0 license apply to
    those upstream components, not automatically to this operator.
 3. Run the community repository's required bundle checks, metadata checks, and
    scorecard against the public images; include the clean-cluster evidence.
+   The bundle includes all six standard basic/OLM scorecard checks under
+   `tests/scorecard/config.yaml`, sourced from `config/olm/scorecard.yaml`.
+   Run `operator-sdk scorecard dist/olm/bundle --wait-time 120s` against a
+   disposable test cluster after `make bundle`.
 4. Open a submission PR and address review feedback. Wait for merge and catalog
    ingestion, then verify the actual OperatorHub listing and generated install
    command before changing the README to say it is available there.

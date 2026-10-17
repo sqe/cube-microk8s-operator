@@ -1,0 +1,17 @@
+Cube Core MicroK8s Operator
+Copyright 2026 Aziz Kurbanov
+
+The original code in this project is licensed under the Apache License,
+Version 2.0. See LICENSE.
+
+This independent community operator deploys software from the Cube project:
+https://github.com/cube-js/cube
+
+Cube Client is MIT licensed. Cube Backend is Apache-2.0 licensed.
+The upstream Cube authors and contributors retain their respective copyrights.
+The operator's license does not replace upstream or other third-party licenses.
+Preserve applicable upstream license and NOTICE files when redistributing
+upstream code or images. See the README for upstream license links.
+
+This project is not an official Cube product and does not imply endorsement
+by Cube Dev, Inc. Its operator icon is independent community branding.

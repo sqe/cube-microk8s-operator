@@ -23,6 +23,7 @@ before production use.
 - [Use the Cube Core REST API](#use-the-cube-core-rest-api)
 - [Agent integrations](#agent-integrations)
 - [Storage, network, and security](#storage-network-and-security)
+- [Proxmox and MicroK8s](#proxmox-and-microk8s)
 - [Install with OLM or OperatorHub](#install-with-olm-or-operatorhub)
 - [Troubleshooting](#troubleshooting)
 - [Production checklist](#production-checklist)
@@ -131,7 +132,7 @@ sequenceDiagram
 
 Prerequisites:
 
-- Go 1.24+, Python 3, Kustomize, and Terraform 1.7+.
+- Go 1.24+, Python 3 with PyYAML, Kustomize, and Terraform 1.7+.
 - Docker, Kind, kubectl, curl, and jq for the demo.
 - Either an amd64 or Apple Silicon arm64 Docker host. `kind-up.sh` detects the
   Kind node architecture and selects the matching digest-pinned Cube Store
@@ -148,9 +149,12 @@ docker build -t cube-operator:v0.1.0 .
 docker build -f python/Dockerfile -t cube-operator-kopf:v0.1.0 .
 ```
 
-All upstream runtime images are versioned and digest-pinned. Local operator
-tags identify builds from this tree; publish them to a trusted registry and set
-the corresponding Kustomize image before deploying outside Kind.
+Cube and Cube Store runtime defaults are versioned and digest-pinned. The Go
+operator release is already published as `ghcr.io/sqe/cube-operator:v0.1.0`;
+use the [verified OLM installation](#install-with-olm-or-operatorhub) without
+building or publishing anything yourself. The local tags above identify your
+own builds; only custom builds need publishing to your registry before use
+outside Kind.
 
 ### GitHub CI, packages, and releases
 
@@ -533,12 +537,19 @@ plan. Hostpath volumes are not durable across node loss.
 
 ## Install with OLM or OperatorHub
 
-**Publication status:** the v0.1.0 OLM packaging is available in this source
-tree, but the GHCR images have not been published and there is no OperatorHub
-listing yet. The catalog installation below requires the images to be published
-first; until then, use the [direct deployment](#deploy-or-switch-controllers).
-Maintainers: see the [release guide](docs/olm-release.md), not the installation
-steps below, to build and publish the images.
+**OLM is ready to use:** the v0.1.0 **alpha** controller, bundle, and catalog
+images are published publicly on GHCR. The
+[successful release verification](https://github.com/sqe/cube-microk8s-operator/actions/runs/39060124635)
+confirmed anonymous pulls and installation through the catalog on a clean
+Kubernetes 1.34 cluster with OLM 0.46: the CSV reached `Succeeded` and the
+controller became ready. Follow the OLM installation steps below.
+
+**OperatorHub listing:** [draft submission #9651](https://github.com/k8s-operatorhub/community-operators/pull/9651)
+is open; the listing is not available until community review, acceptance, and
+catalog ingestion complete. The OLM catalog installation already works.
+
+Release engineering and community submission details are documented separately
+in the [maintainer release guide](docs/olm-release.md).
 
 ### OLM catalog installation
 
@@ -555,7 +566,7 @@ If OLM is not already installed, install it once with
 operator-sdk olm install --version 0.46.0 --timeout 5m
 ```
 
-After the release images are public, run from a checkout of this repository:
+Run from a checkout of this repository:
 
 ```bash
 # CatalogSource + cluster-wide OperatorGroup + alpha Subscription.
@@ -588,8 +599,9 @@ For installation failures, inspect `kubectl -n olm get catalogsource,pods` and
 
 ### OperatorHub installation
 
-**Not available yet.** Pushing a catalog image does not add an OperatorHub
-listing. Once the community submission is accepted and appears in the public
+**Submission in progress:** [draft PR #9651](https://github.com/k8s-operatorhub/community-operators/pull/9651)
+contains the initial package. It is not an accepted OperatorHub listing yet.
+Once the community submission is accepted and appears in the public
 catalog, find **Cube Core Operator** on [OperatorHub.io](https://operatorhub.io),
 select **Install**, and follow that listing's generated commands. Use the
 `alpha` channel and all-namespaces install mode. Do not install the custom
@@ -627,9 +639,15 @@ kubectl -n cube-system logs deployment/cube-operator-kopf  # Kopf
 
 ## Production checklist
 
+This is a per-environment operations checklist, not a list of unfinished
+release tasks. The alpha OLM images are already public and installation-tested;
+production suitability, credentials, storage, and recovery still need validation
+for your own deployment.
+
 - [ ] Keep the Go controller as the default unless Kopf's one-replica tradeoff
       is deliberate; verify exactly one controller is active.
-- [ ] Publish operator images to a trusted registry and pin immutable digests.
+- [ ] Use the published operator release pinned to an immutable digest; publish
+      to your own trusted registry only if you maintain a custom build.
 - [ ] Keep Cube/Cube Store images digest-pinned and test upgrades in staging.
 - [ ] Use at least two API replicas and size API, refresh, and Cube Store from
       observed CPU, memory, queue, and query behavior.
@@ -668,6 +686,8 @@ license, and NOTICE files when redistributing Cube code or modified images;
 other dependencies retain their own licenses. This is an independent project,
 not an official Cube product or a claim of Cube endorsement.
 
-**Operator license:** this repository does not yet declare a license for its
-own code. An explicit project license is still required before the planned
-OperatorHub community submission; the upstream licenses do not resolve that.
+**Operator license:** the original code in this repository is licensed under
+the [Apache License 2.0](LICENSE), copyright 2026 Aziz Kurbanov. See [NOTICE](NOTICE)
+for attribution. This does not relicense Cube or other third-party components.
+
+**Maintainer:** Aziz Kurbanov — [azizbek@gmail.com](mailto:azizbek@gmail.com).
