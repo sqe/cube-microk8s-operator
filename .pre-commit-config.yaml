@@ -31,3 +31,10 @@ repos:
         additional_dependencies: [PyYAML==6.0.3]
         files: ^python/.*\.py$
         pass_filenames: false
+      - id: mcp-demo-tests
+        name: MCP execution protocol tests
+        entry: python -B -m unittest discover -s demo -p test_mcp_execution.py -v
+        language: python
+        additional_dependencies: [mcp==1.26.0]
+        files: ^demo/(mcp_execution|test_mcp_execution)\.py$
+        pass_filenames: false

@@ -96,9 +96,10 @@ fi
 
 forward_log=$(mktemp)
 event_file=$(mktemp)
+mcp_output=$(mktemp -d)
 kubectl --context "$CONTEXT" -n cube-demo port-forward --address 127.0.0.1 service/agent-ingest :8082 >"$forward_log" 2>&1 &
 forward_pid=$!
-trap 'kill "$forward_pid" 2>/dev/null || true; wait "$forward_pid" 2>/dev/null || true; rm -f "$response_file" "$forward_log" "$event_file"' EXIT
+trap 'kill "$forward_pid" 2>/dev/null || true; wait "$forward_pid" 2>/dev/null || true; rm -f "$response_file" "$forward_log" "$event_file"; rm -rf "$mcp_output"' EXIT
 for _ in $(seq 1 50); do
   grep -q 'Forwarding from' "$forward_log" && break
   sleep 0.2
@@ -122,4 +123,9 @@ for _ in $(seq 1 50); do
 done
 AGENT_INGEST_URL="http://127.0.0.1:$ingest_port" AGENT_INGEST_TOKEN="$ingest_token" \
   AGENT_EVENT_FILE="$event_file" CUBE_CORE_URL="$CUBE_URL" CUBE_CORE_TOKEN="$token" python3 "$ROOT_DIR/demo/agent-executions.py"
-echo "Kind end-to-end demo passed: Kubernetes observations and agent execution telemetry."
+# Public CI uses a labelled fixture, not a private agent or a live weather API.
+AGENT_INGEST_URL="http://127.0.0.1:$ingest_port" AGENT_INGEST_TOKEN="$ingest_token" \
+  CUBE_CORE_URL="$CUBE_URL" CUBE_CORE_TOKEN="$token" python3 "$ROOT_DIR/demo/mcp_execution.py" \
+  --agent weather-fixture --output "$mcp_output" -- \
+  python3 "$ROOT_DIR/demo/test_mcp_execution.py" --serve-fixture
+echo "Kind end-to-end demo passed: Kubernetes, agent telemetry, and MCP-to-Cube verification."

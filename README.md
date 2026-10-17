@@ -170,6 +170,8 @@ pre-commit checks as local commits, including workflow lint with ShellCheck.
 Prerequisites:
 
 - Go 1.24+, Python 3 with PyYAML, Kustomize, and Terraform 1.7+.
+- Install `demo/requirements-mcp.txt` in your Python environment for Kind E2E
+  and MCP execution demos: `python -m pip install -r demo/requirements-mcp.txt`.
 - Docker, Kind, kubectl, curl, and jq for the demo.
 - Either an amd64 or Apple Silicon arm64 Docker host. `kind-up.sh` detects the
   Kind node architecture and selects the matching digest-pinned Cube Store
@@ -488,6 +490,57 @@ validation results, latency, and reported token/cost usage. This is separate fro
 the read-only Cube skill below. See [setup, schema, and queries](docs/agent-executions.md).
 The shared-token Kind demo is not a multi-tenant authorization system; OIDC and
 tenant enforcement must be configured separately before external use.
+
+### Real weather agent: MCP execution to SQL and BI
+
+The [MCP execution demo](demo/mcp_execution.py) ran a separate weather agent's
+real `weather_current` tool through MCP and queried its persisted spans through
+Cube. On October 17, 2026, Open-Meteo returned Reykjavik conditions of **9.7 °C,
+91% humidity, and 45.0 km/h wind** (observation time 20:45 local Reykjavik time).
+This was a host-executed agent tool call, not a synthetic response, Kafka task,
+or LLM inference. PostgreSQL and Cube agreed on these execution metrics:
+
+| Agent | Spans | Runs | Failed runs | Run duration | Model tokens / reported cost |
+| --- | ---: | ---: | ---: | ---: | --- |
+| weather | 3 | 1 | 0 | 2160.206 ms | 0 / $0 |
+
+The captured trace was `mcp-bb768566719a424aba21b58af46a6c8b`. It contains
+successful **run**, **tool**, and **artifact-reference** records. Results and
+timings vary between runs; no model usage is invented for a non-LLM agent.
+
+Execution fields are persisted in PostgreSQL; the raw weather response is a
+local JSON artifact, not weather-observation SQL columns. The YAML semantic
+model defines Cube measures/dimensions, and Cube generates SQL against those
+rows. For example, this audit query returns the run count and average latency:
+
+```sql
+SELECT agent_name,
+       count(*) FILTER (WHERE kind = 'run') AS runs,
+       avg(duration_ms) FILTER (WHERE kind = 'run') AS average_run_ms
+FROM public.agent_executions
+WHERE trace_id = 'mcp-bb768566719a424aba21b58af46a6c8b'
+GROUP BY agent_name;
+```
+
+BI applications can use the same definitions through Cube's REST API:
+
+```json
+{
+  "query": {
+    "dimensions": ["AgentExecutions.agent"],
+    "measures": ["AgentExecutions.runs", "AgentExecutions.averageRunDurationMs"],
+    "filters": [{"member": "AgentExecutions.traceId", "operator": "equals",
+      "values": ["mcp-bb768566719a424aba21b58af46a6c8b"]}]
+  }
+}
+```
+
+See [reproduction, result artifacts, SQL auditing, generated SQL, and BI queries](docs/weather-mcp-demo.md).
+No pre-aggregations are declared in this demo; model definitions are not
+automatically materialized SQL tables. The private weather implementation is
+not redistributed here. Public CI tests the same MCP → ingestion → Cube path
+with a clearly labelled fixture instead of depending on private source or a
+live weather provider. This does not instrument the entire running agent fleet.
 
 ### Example: harvesting a complete agent task for BI
 
