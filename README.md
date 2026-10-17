@@ -23,9 +23,10 @@ before production use.
 - [Use the Cube Core REST API](#use-the-cube-core-rest-api)
 - [Agent integrations](#agent-integrations)
 - [Storage, network, and security](#storage-network-and-security)
-- [Publish through OperatorHub and OLM](#publish-through-operatorhub-and-olm)
+- [Install with OLM or OperatorHub](#install-with-olm-or-operatorhub)
 - [Troubleshooting](#troubleshooting)
 - [Production checklist](#production-checklist)
+- [Upstream attribution and licensing](#upstream-attribution-and-licensing)
 
 Deeper references: [architecture and operations](docs/architecture.md),
 [agent integration boundary](docs/agent-integration.md), and the
@@ -515,56 +516,73 @@ nodes enable MicroK8s HA. VM deletion protection defaults on. Before deliberate
 destruction, back up data, set `protect_vms=false`, apply, and review a destroy
 plan. Hostpath volumes are not durable across node loss.
 
-## Publish through OperatorHub and OLM
+## Install with OLM or OperatorHub
 
-This project is **not currently published on OperatorHub**. An OLM release
-should package the production-default Go controller; Kopf remains a separately
-selected deployment, not a second controller in the same installation.
+**Publication status:** the v0.1.0 OLM packaging is available in this source
+tree, but the GHCR images have not been published and there is no OperatorHub
+listing yet. The catalog installation below requires the images to be published
+first; until then, use the [direct deployment](#deploy-or-switch-controllers).
+Maintainers: see the [release guide](docs/olm-release.md), not the installation
+steps below, to build and publish the images.
 
-For each release, use Operator SDK's bundle workflow to generate a CSV and CRD
-bundle from `config/`, then review rather than blindly accepting generated
-metadata:
+### OLM catalog installation
+
+Use Kubernetes 1.34+ with **classic OLM** (`CatalogSource` and `Subscription`,
+not OLM v1). This installs the Go controller in `cube-system` and watches all
+namespaces. Do not install it alongside a directly deployed Go or Kopf
+controller. Remove the previous installation's controller and RBAC before
+handing ownership to OLM; do not delete the CRD or existing CubeClusters.
+
+If OLM is not already installed, install it once with
+[Operator SDK](https://sdk.operatorframework.io/docs/installation/):
 
 ```bash
-operator-sdk generate kustomize manifests -q
-make bundle IMG=ghcr.io/ORG/cube-operator:vX.Y.Z VERSION=X.Y.Z \
-  CHANNELS=stable DEFAULT_CHANNEL=stable
-operator-sdk bundle validate ./bundle
-operator-sdk scorecard ./bundle
-docker build -f bundle.Dockerfile -t ghcr.io/ORG/cube-operator-bundle:vX.Y.Z .
+operator-sdk olm install --version 0.46.0 --timeout 5m
 ```
 
-The CSV must include accurate `alm-examples`, `categories`, `capabilities`,
-`containerImage`, description, repository/support links, provider and named
-maintainers; add a base64 SVG or PNG `icon` with the matching media type.
-Declare only install modes actually tested (`AllNamespaces` is the intended Go
-manager mode), and keep owned CRD versions, permissions, image digests, channels,
-upgrade graph, and replacement metadata consistent.
-
-Push the signed controller and bundle images to a public immutable registry,
-record digests, generate SBOM/provenance, and verify signatures in CI. Test the
-published bundle on a clean Kind cluster with OLM before submission:
+After the release images are public, run from a checkout of this repository:
 
 ```bash
-kind create cluster --name cube-olm
-operator-sdk olm install
-docker push ghcr.io/ORG/cube-operator:vX.Y.Z
-docker push ghcr.io/ORG/cube-operator-bundle:vX.Y.Z
-operator-sdk run bundle ghcr.io/ORG/cube-operator-bundle:vX.Y.Z --timeout 10m
-kubectl get csv -A
+# CatalogSource + cluster-wide OperatorGroup + alpha Subscription.
+kubectl apply -f config/olm/install.yaml
+kubectl -n cube-system wait --for=create \
+  csv/cube-microk8s-operator.v0.1.0 --timeout=5m
+kubectl -n cube-system wait --for=jsonpath='{.status.phase}'=Succeeded \
+  csv/cube-microk8s-operator.v0.1.0 --timeout=5m
+kubectl -n cube-system rollout status deployment/cube-operator --timeout=2m
+```
+
+The manifest uses `ghcr.io/sqe/cube-operator-catalog:v0.1.0`, package
+`cube-microk8s-operator`, and channel `alpha`. It assumes the OLM global catalog
+namespace is `olm`; adapt `metadata.namespace` on the CatalogSource and
+`spec.sourceNamespace` on the Subscription if yours differs. The Subscription
+automatically approves installation; use `installPlanApproval: Manual` and
+review/approve its InstallPlan if required by your change-control policy.
+Do not create a second OperatorGroup in an existing operator namespace.
+
+Next, [create the model, configuration Secret, and storage](#configure-cube-core),
+adapt `config/samples/production.yaml` to your environment, and apply it:
+
+```bash
 kubectl apply -f config/samples/production.yaml
-operator-sdk cleanup cube-microk8s-operator
-kind delete cluster --name cube-olm
+kubectl -n cube get cubecluster analytics
 ```
 
-For catalog testing, build and push a file-based catalog with `opm init`,
-`opm render`, `opm validate`, and `opm generate dockerfile`, then install a
-`CatalogSource` and `Subscription` on the same clean Kind/OLM environment.
-Finally fork the appropriate
-[`k8s-operatorhub/community-operators`](https://github.com/k8s-operatorhub/community-operators)
-repository, add the validated version under its package directory, run that
-repository's required tests, and submit a PR with release and test evidence.
-Publication occurs only after the community review and merge.
+For installation failures, inspect `kubectl -n olm get catalogsource,pods` and
+`kubectl -n cube-system get subscription,installplan,csv`.
+
+### OperatorHub installation
+
+**Not available yet.** Pushing a catalog image does not add an OperatorHub
+listing. Once the community submission is accepted and appears in the public
+catalog, find **Cube Core Operator** on [OperatorHub.io](https://operatorhub.io),
+select **Install**, and follow that listing's generated commands. Use the
+`alpha` channel and all-namespaces install mode. Do not install the custom
+catalog Subscription as well; both routes install the same controller.
+
+Verify the installed CSV and controller, then configure Cube Core as above.
+OperatorHub.io is separate from OpenShift's community catalog; an OpenShift
+console listing requires its own submission and validation.
 
 ## Troubleshooting
 
@@ -614,3 +632,27 @@ kubectl -n cube-system logs deployment/cube-operator-kopf  # Kopf
       Terraform state, and recovery credentials; rehearse restore.
 - [ ] Validate CRD/controller upgrades and rollback with representative models
       before production rollout.
+
+## Upstream attribution and licensing
+
+This project uses open-source software from
+**[Cube](https://github.com/cube-js/cube)**. Credit for Cube Core, its client
+libraries, backend, and Cube Store belongs to the upstream Cube authors and
+contributors. This operator deploys the upstream `cubejs/cube` and
+`cubejs/cubestore` container images and integrates with Cube's REST API; the
+Go and Kopf operator images are built separately from this repository.
+
+As documented in [Cube's v1.7.20 license statement](https://github.com/cube-js/cube/blob/v1.7.20/README.md#license):
+
+- **Cube Client:** [MIT License](https://github.com/cube-js/cube/blob/v1.7.20/packages/cubejs-client-core/LICENSE).
+- **Cube Backend:** [Apache License 2.0](https://github.com/cube-js/cube/blob/v1.7.20/packages/cubejs-server/LICENSE).
+
+Those licenses apply to the respective upstream components, not automatically
+to this operator's original code. Preserve applicable upstream copyright,
+license, and NOTICE files when redistributing Cube code or modified images;
+other dependencies retain their own licenses. This is an independent project,
+not an official Cube product or a claim of Cube endorsement.
+
+**Operator license:** this repository does not yet declare a license for its
+own code. An explicit project license is still required before the planned
+OperatorHub community submission; the upstream licenses do not resolve that.

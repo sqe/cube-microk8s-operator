@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cube-system
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: CatalogSource
+metadata:
+  name: cube-operator-catalog
+  namespace: olm
+spec:
+  sourceType: grpc
+  image: ghcr.io/sqe/cube-operator-catalog:v0.1.0
+  displayName: Cube Core Operator
+  publisher: Aziz Kurbanov
+  grpcPodConfig:
+    securityContextConfig: restricted
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: cube-operator
+  namespace: cube-system
+spec: {}
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: cube-microk8s-operator
+  namespace: cube-system
+spec:
+  channel: alpha
+  name: cube-microk8s-operator
+  source: cube-operator-catalog
+  sourceNamespace: olm
+  startingCSV: cube-microk8s-operator.v0.1.0
+  installPlanApproval: Automatic

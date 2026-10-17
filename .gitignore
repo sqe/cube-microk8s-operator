@@ -10,3 +10,4 @@ override.tf.json
 kubeconfig
 *.bak
 .DS_Store
+/dist/olm/

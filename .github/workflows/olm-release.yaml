@@ -1,0 +1,191 @@
+name: Publish OLM release
+
+on:
+  push:
+    tags: [v0.1.0]
+  workflow_dispatch:
+
+concurrency:
+  group: olm-release-v0.1.0
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  VERSION: 0.1.0
+  OPERATOR_SDK_VERSION: v1.42.3
+  OPM_VERSION: v1.74.0
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      controller: ${{ steps.controller.outputs.digest }}
+      bundle: ${{ steps.bundle.outputs.digest }}
+      catalog: ${{ steps.catalog.outputs.digest }}
+      registry: ${{ steps.names.outputs.registry }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Image namespace
+        id: names
+        run: echo "registry=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Test controller
+        run: |
+          go test ./...
+          go vet ./...
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish controller
+        id: controller
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.names.outputs.registry }}/cube-operator:v${{ env.VERSION }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          sbom: true
+          provenance: mode=max
+      - name: Install bundle tools
+        run: |
+          python3 -m venv "$RUNNER_TEMP/olm-venv"
+          "$RUNNER_TEMP/olm-venv/bin/pip" install PyYAML==6.0.3
+          echo "$RUNNER_TEMP/olm-venv/bin" >> "$GITHUB_PATH"
+          mkdir -p "$RUNNER_TEMP/olm-tools"
+          cd "$RUNNER_TEMP/olm-tools"
+          curl -fsSLO "https://github.com/operator-framework/operator-sdk/releases/download/$OPERATOR_SDK_VERSION/operator-sdk_linux_amd64"
+          curl -fsSL "https://github.com/operator-framework/operator-sdk/releases/download/$OPERATOR_SDK_VERSION/checksums.txt" | grep ' operator-sdk_linux_amd64$' | sha256sum -c -
+          curl -fsSLO "https://github.com/operator-framework/operator-registry/releases/download/$OPM_VERSION/linux-amd64-opm"
+          curl -fsSL "https://github.com/operator-framework/operator-registry/releases/download/$OPM_VERSION/checksums.txt" | grep ' linux-amd64-opm$' | sha256sum -c -
+          chmod +x operator-sdk_linux_amd64 linux-amd64-opm
+          mv operator-sdk_linux_amd64 operator-sdk
+          mv linux-amd64-opm opm
+          echo "$RUNNER_TEMP/olm-tools" >> "$GITHUB_PATH"
+          # opm reads containers/image policy, independently of Docker's login.
+          mkdir -p "$HOME/.config/containers"
+          printf '{"default":[{"type":"insecureAcceptAnything"}]}\n' > "$HOME/.config/containers/policy.json"
+      - name: Generate and validate digest-pinned bundle
+        env:
+          IMG: ${{ steps.names.outputs.registry }}/cube-operator@${{ steps.controller.outputs.digest }}
+        run: make bundle-validate
+      - name: Publish bundle
+        id: bundle
+        uses: docker/build-push-action@v6
+        with:
+          context: dist/olm/bundle
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.names.outputs.registry }}/cube-operator-bundle:v${{ env.VERSION }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          sbom: true
+          provenance: mode=max
+      - name: Generate and validate catalog
+        env:
+          BUNDLE_IMG: ${{ steps.names.outputs.registry }}/cube-operator-bundle@${{ steps.bundle.outputs.digest }}
+        run: make catalog
+      - name: Publish catalog
+        id: catalog
+        uses: docker/build-push-action@v6
+        with:
+          context: dist/olm
+          file: dist/olm/catalog.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.names.outputs.registry }}/cube-operator-catalog:v${{ env.VERSION }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          sbom: true
+          provenance: mode=max
+      - name: Record release images
+        env:
+          REGISTRY: ${{ steps.names.outputs.registry }}
+          CONTROLLER: ${{ steps.controller.outputs.digest }}
+          BUNDLE: ${{ steps.bundle.outputs.digest }}
+          CATALOG: ${{ steps.catalog.outputs.digest }}
+        run: |
+          printf '%s\n' "$REGISTRY/cube-operator@$CONTROLLER" "$REGISTRY/cube-operator-bundle@$BUNDLE" "$REGISTRY/cube-operator-catalog@$CATALOG" | tee dist/olm/images.txt
+          {
+            echo '### Published OLM images'
+            echo '```text'
+            cat dist/olm/images.txt
+            echo '```'
+            echo 'Set all three GHCR packages to public on first publication. The verify job checks anonymous pulls and OLM installation. Re-run that failed job after changing visibility; do not re-publish the images.'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: olm-release-v0.1.0
+          path: dist/olm/
+
+  verify:
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      REGISTRY: ${{ needs.publish.outputs.registry }}
+      CONTROLLER: ${{ needs.publish.outputs.controller }}
+      BUNDLE: ${{ needs.publish.outputs.bundle }}
+      CATALOG: ${{ needs.publish.outputs.catalog }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check anonymous pulls
+        run: |
+          export DOCKER_CONFIG="$(mktemp -d)"
+          for image in "cube-operator@$CONTROLLER" "cube-operator-bundle@$BUNDLE" "cube-operator-catalog@$CATALOG"; do
+            if ! docker pull "$REGISTRY/$image"; then
+              echo "::error::Anonymous pull failed. Make all three GHCR packages public, then re-run this job."
+              exit 1
+            fi
+          done
+      - name: Install test tools
+        run: |
+          mkdir -p "$RUNNER_TEMP/olm-tools"
+          curl -fsSL "https://github.com/operator-framework/operator-sdk/releases/download/$OPERATOR_SDK_VERSION/operator-sdk_linux_amd64" -o "$RUNNER_TEMP/olm-tools/operator-sdk"
+          curl -fsSL "https://github.com/operator-framework/operator-sdk/releases/download/$OPERATOR_SDK_VERSION/checksums.txt" | grep ' operator-sdk_linux_amd64$' | sed 's/operator-sdk_linux_amd64/operator-sdk/' > "$RUNNER_TEMP/olm-tools/checksums.txt"
+          (cd "$RUNNER_TEMP/olm-tools" && sha256sum -c checksums.txt)
+          chmod +x "$RUNNER_TEMP/olm-tools/operator-sdk"
+          echo "$RUNNER_TEMP/olm-tools" >> "$GITHUB_PATH"
+          curl -fsSL https://kind.sigs.k8s.io/dl/v0.30.0/kind-linux-amd64 -o "$RUNNER_TEMP/olm-tools/kind"
+          curl -fsSL https://kind.sigs.k8s.io/dl/v0.30.0/kind-linux-amd64.sha256sum | sed 's/kind-linux-amd64/kind/' > "$RUNNER_TEMP/olm-tools/kind-checksums.txt"
+          (cd "$RUNNER_TEMP/olm-tools" && sha256sum -c kind-checksums.txt)
+          chmod +x "$RUNNER_TEMP/olm-tools/kind"
+      - name: Install through OLM
+        run: |
+          export KUBECONFIG="$RUNNER_TEMP/olm-kubeconfig"
+          kind create cluster --name cube-olm --image kindest/node:v1.34.0
+          operator-sdk olm install --version 0.46.0 --timeout 5m
+          sed "s|ghcr.io/sqe/cube-operator-catalog:v0.1.0|$REGISTRY/cube-operator-catalog@$CATALOG|" config/olm/install.yaml | kubectl apply -f -
+          kubectl -n cube-system wait --for=create csv/cube-microk8s-operator.v0.1.0 --timeout=5m
+          kubectl -n cube-system wait --for=jsonpath='{.status.phase}'=Succeeded csv/cube-microk8s-operator.v0.1.0 --timeout=5m
+          kubectl -n cube-system rollout status deployment/cube-operator --timeout=2m
+          test "$(kubectl -n cube-system get deployment cube-operator -o jsonpath='{.spec.template.spec.containers[0].image}')" = "$REGISTRY/cube-operator@$CONTROLLER"
+      - name: Capture installation evidence
+        if: always()
+        env:
+          KUBECONFIG: ${{ runner.temp }}/olm-kubeconfig
+        run: |
+          mkdir -p evidence
+          kubectl get nodes -o wide > evidence/nodes.txt 2>&1 || true
+          kubectl -n olm get catalogsource,pods -o yaml > evidence/catalog.yaml 2>&1 || true
+          kubectl -n cube-system get subscription,installplan,csv,deploy,pods -o yaml > evidence/install.yaml 2>&1 || true
+          kubectl -n cube-system logs deployment/cube-operator > evidence/controller.log 2>&1 || true
+          kubectl get events -A --sort-by=.lastTimestamp > evidence/events.txt 2>&1 || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: olm-install-evidence
+          path: evidence/
+      - name: Clean up test cluster
+        if: always()
+        run: kind delete cluster --name cube-olm
