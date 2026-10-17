@@ -44,10 +44,29 @@ jobs:
           mkdir -p evidence
           kubectl --context kind-cube-demo get pods -A -o wide > evidence/pods.txt 2>&1 || true
           kubectl --context kind-cube-demo -n cube-demo get cubeclusters,deployments,statefulsets -o yaml > evidence/workloads.yaml 2>&1 || true
+          kubectl --context kind-cube-demo -n cube-demo get services,endpointslices -o yaml > evidence/service-endpoints.yaml 2>&1 || true
+          kubectl --context kind-cube-demo -n kube-system logs daemonset/kube-proxy --tail=200 > evidence/kube-proxy.log 2>&1 || true
           kubectl --context kind-cube-demo get events -A --sort-by=.lastTimestamp > evidence/events.txt 2>&1 || true
           for workload in agent-ingest telemetry-api telemetry-refresh-worker telemetry-collector; do
             kubectl --context kind-cube-demo -n cube-demo logs "deployment/$workload" --tail=200 > "evidence/$workload.log" 2>&1 || true
           done
+      - name: Diagnose exposed port versus in-cluster health
+        if: failure()
+        run: |
+          curl --verbose --connect-timeout 5 --max-time 10 http://127.0.0.1:4000/readyz > evidence/host-health.txt 2>&1 || true
+          docker port cube-demo-control-plane > evidence/port-mapping.txt 2>&1 || true
+          kubectl --context kind-cube-demo -n cube-demo exec deployment/telemetry-api -c api -- node -e '
+            Promise.all(["127.0.0.1", "telemetry-api"].map(async host => {
+              const url = `http://${host}:4000/readyz`;
+              try {
+                const response = await fetch(url, {signal: AbortSignal.timeout(5000)});
+                console.log(url, response.status, await response.text());
+              } catch (error) {
+                console.error(url, error);
+                process.exitCode = 1;
+              }
+            }));
+          ' > evidence/in-cluster-health.txt 2>&1 || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:

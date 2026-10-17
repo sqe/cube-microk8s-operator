@@ -485,6 +485,90 @@ the read-only Cube skill below. See [setup, schema, and queries](docs/agent-exec
 The shared-token Kind demo is not a multi-tenant authorization system; OIDC and
 tenant enforcement must be configured separately before external use.
 
+### Example: harvesting a complete agent task for BI
+
+The [E2E producer](demo/agent-executions.py) submits the following **synthetic**
+task through the real ingestion → PostgreSQL → Cube path. It demonstrates the
+captured records; it does not execute these agents, call a real model, or create
+the referenced report. Actual agents must instrument their own runtime.
+
+| Agent | Span kind | Captured work and outcome | Parent |
+|---|---|---|---|
+| `analytics-worker` | `run` | Succeeded in 20 seconds | Root |
+| `analytics-worker` | `skill` | `operating-cube-core`, version `1.0.0`, 8 seconds | Worker run |
+| `analytics-worker` | `tool` | `Cube query` via `http`, succeeded in 2 seconds | Skill |
+| `analytics-worker` | `model` | `synthetic` / `demo-model`: 137 input + 41 output tokens, $0.0123 | Worker run |
+| `analytics-worker` | `artifact` | JSON report reference: `urn:demo:<traceId>:report` | Worker run |
+| `analytics-worker` | `handoff` | Delegated to `reviewer` | Worker run |
+| `reviewer` | `run` | Failed in 6 seconds; `errorType = validation_failed` | Handoff |
+| `reviewer` | `model` | `synthetic` / `demo-model`: 23 input + 7 output tokens, $0.0045 | Reviewer run |
+| `reviewer` | `validation` | Failed check, 3 seconds | Reviewer run |
+
+All nine records share a `traceId`. Each has its own `eventId`; `runId` identifies
+the worker or reviewer execution, and `parentId` links the graph above. Common
+dimensions include tenant, cluster, namespace, name, status, and timestamps.
+Artifact URIs are references only: the service does not store or fetch reports,
+SQL files, patches, screenshots, or other artifact contents.
+
+Reproduce the harvest with the new source build:
+
+```bash
+make kind-up
+make kind-e2e
+```
+
+The test prints a fresh trace ID and verifies this normalized summary through
+Cube queries, both before and after replacing the ingestion pod:
+
+```json
+{
+  "count": 9,
+  "runs": 2,
+  "failedRuns": 1,
+  "failedValidations": 1,
+  "averageRunDurationMs": 13000,
+  "inputTokens": 160,
+  "outputTokens": 48,
+  "costUsd": 0.0168
+}
+```
+
+Inspect `/cubejs-api/v1/meta` first, then POST this query to
+`/cubejs-api/v1/load` with a Cube JWT directly in `Authorization`. Replace the
+trace placeholder with the ID printed by your run; retained demo records expire
+after seven days by default.
+
+```json
+{
+  "query": {
+    "measures": [
+      "AgentExecutions.runs",
+      "AgentExecutions.failedRuns",
+      "AgentExecutions.averageRunDurationMs",
+      "AgentExecutions.inputTokens",
+      "AgentExecutions.outputTokens",
+      "AgentExecutions.costUsd"
+    ],
+    "dimensions": ["AgentExecutions.agent"],
+    "filters": [{
+      "member": "AgentExecutions.traceId",
+      "operator": "equals",
+      "values": ["TRACE_ID_FROM_KIND_E2E"]
+    }],
+    "limit": 100
+  }
+}
+```
+
+That separates worker and reviewer outcomes and model usage. For the execution
+audit trail, query `eventId`, `runId`, `parentId`, `kind`, `name`, and `status`
+with the same trace filter. Add `skillVersion`, `tool`, `targetAgent`,
+`artifactUri`, `artifactType`, and `validation` to inspect the actual evidence.
+Use `kind = skill` when comparing skill names/versions across runs. Cube
+responses use qualified member names and commonly return numbers as strings;
+convert them deliberately when building dashboards. Overlapping child spans
+are not summed into run latency, and only model-call spans carry usage/cost.
+
 ### Local self-hosted Cube Core skill
 
 The project-local

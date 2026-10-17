@@ -9,6 +9,31 @@ CUBE_URL=${CUBE_URL:-http://127.0.0.1:4000}
 need() {
   command -v "$1" >/dev/null 2>&1 || { echo "Required command not found: $1" >&2; exit 1; }
 }
+
+# Pod readiness can precede the exposed Kind port becoming reachable after a
+# rollout. Retry transport failures only; HTTP and response-contract errors fail.
+cube_startup_get() {
+  local attempt response result
+  for attempt in $(seq 1 6); do
+    if response=$(curl --fail --silent --show-error --connect-timeout 5 "$@"); then
+      printf '%s\n' "$response"
+      return 0
+    else
+      result=$?
+    fi
+    case "$result" in
+      7|28|52|56)
+        if [[ "$attempt" -lt 6 ]]; then
+          echo "Cube transport failed (curl $result); retrying ($attempt/6)." >&2
+          sleep 2
+          continue
+        fi
+        ;;
+    esac
+    return "$result"
+  done
+}
+
 for command in curl jq kubectl python3; do need "$command"; done
 kubectl config get-contexts "$CONTEXT" >/dev/null 2>&1 || {
   echo "Kind context $CONTEXT does not exist; run scripts/kind-up.sh first." >&2
@@ -17,7 +42,7 @@ kubectl config get-contexts "$CONTEXT" >/dev/null 2>&1 || {
 
 kubectl --context "$CONTEXT" -n cube-demo wait --for=condition=Ready cubecluster/telemetry --timeout=2m
 for endpoint in readyz livez; do
-  response=$(curl --fail --silent --show-error --max-time 10 "$CUBE_URL/$endpoint")
+  response=$(cube_startup_get --max-time 10 "$CUBE_URL/$endpoint")
   jq -e '.health == "HEALTH"' <<<"$response" >/dev/null
   echo "/$endpoint: healthy"
 done
@@ -36,7 +61,7 @@ PY
 )
 unset api_secret
 
-meta=$(curl --fail --silent --show-error --max-time 30 \
+meta=$(cube_startup_get --max-time 30 \
   -H "Authorization: $token" "$CUBE_URL/cubejs-api/v1/meta")
 jq -e '.cubes | any(.name == "KubernetesTelemetry")' <<<"$meta" >/dev/null
 echo "/cubejs-api/v1/meta: KubernetesTelemetry model found"
