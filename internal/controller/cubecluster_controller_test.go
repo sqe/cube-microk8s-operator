@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	platformv1alpha1 "github.com/akurbanov/cube-microk8s-operator/api/v1alpha1"
+	platformv1alpha1 "github.com/sqe/cube-microk8s-operator/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

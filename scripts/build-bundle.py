@@ -61,7 +61,7 @@ Do not run another Go or Kopf controller alongside this installation.
 
 ### Prerequisites
 
-Use Kubernetes 1.34 or later. Before creating a CubeCluster, create its model
+Use Kubernetes 1.32.8 or later. Before creating a CubeCluster, create its model
 ConfigMap, configuration Secret, and durable storage (an existing PVC or S3
 bucket with any required credentials). Adapt the example bucket and resource
 requests to your environment. The operator does not create credentials,
@@ -78,7 +78,7 @@ Apache-2.0 licensed. Their licenses and copyrights remain separate.
 """,
         "version": version,
         "maturity": "alpha",
-        "minKubeVersion": "1.34.0",
+        "minKubeVersion": "1.32.8",
         "provider": {"name": "Aziz Kurbanov", "url": "https://github.com/sqe"},
         "maintainers": [{"name": "Aziz Kurbanov", "email": "azizbek@gmail.com"}],
         "icon": [{

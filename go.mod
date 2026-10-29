@@ -1,4 +1,4 @@
-module github.com/akurbanov/cube-microk8s-operator
+module github.com/sqe/cube-microk8s-operator
 
 go 1.24.0
 

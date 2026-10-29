@@ -170,6 +170,10 @@ jobs:
     needs: publish
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        kubernetes: [v1.32.8, v1.34.0]
     env:
       REGISTRY: ${{ needs.publish.outputs.registry }}
       CONTROLLER: ${{ needs.publish.outputs.controller }}
@@ -207,7 +211,7 @@ jobs:
       - name: Install through OLM
         run: |
           export KUBECONFIG="$RUNNER_TEMP/olm-kubeconfig"
-          kind create cluster --name cube-olm --image kindest/node:v1.34.0
+          kind create cluster --name cube-olm --image "kindest/node:${{ matrix.kubernetes }}"
           operator-sdk olm install --version 0.46.0 --timeout 5m
           kubectl apply -f dist/olm/install.yaml
           kubectl -n cube-system wait --for=create "csv/cube-microk8s-operator.v$VERSION" --timeout=5m
@@ -228,7 +232,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: olm-install-evidence
+          name: olm-install-evidence-${{ matrix.kubernetes }}
           path: evidence/
       - name: Clean up test cluster
         if: always()
@@ -256,7 +260,7 @@ jobs:
           {
             echo 'Alpha release with agent-execution telemetry: completed agent runs, skills, tools, handoffs, artifact references, validations, and model usage. Go and Kopf Kind E2E checks passed before publication; the published catalog passed anonymous pull and clean Kind/OLM installation checks.'
             echo
-            echo 'With classic OLM installed on Kubernetes 1.34+, apply the attached install.yaml, then configure Cube Core using the repository README. Do not run Go and Kopf controllers together.'
+            echo 'With classic OLM installed on Kubernetes 1.32.8+, apply the attached install.yaml, then configure Cube Core using the repository README. Do not run Go and Kopf controllers together.'
             echo 'This is a separate single-version catalog for fresh installs, not an automatic v0.1.0 upgrade. Agent ingestion is an optional demo/standalone process, not an automatically deployed OLM component. See docs/agent-executions.md for instrumentation and security limits.'
             echo
             echo '### Published images'

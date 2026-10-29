@@ -5,9 +5,9 @@ import (
 	"flag"
 	"os"
 
-	platformv1alpha1 "github.com/akurbanov/cube-microk8s-operator/api/v1alpha1"
-	"github.com/akurbanov/cube-microk8s-operator/internal/controller"
-	"github.com/akurbanov/cube-microk8s-operator/internal/telemetry"
+	platformv1alpha1 "github.com/sqe/cube-microk8s-operator/api/v1alpha1"
+	"github.com/sqe/cube-microk8s-operator/internal/controller"
+	"github.com/sqe/cube-microk8s-operator/internal/telemetry"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"

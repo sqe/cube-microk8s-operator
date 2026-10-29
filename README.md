@@ -752,11 +752,15 @@ catalog ingestion complete. The OLM catalog installation already works.
 
 ### OLM catalog installation
 
-Use Kubernetes 1.34+ with **classic OLM** (`CatalogSource` and `Subscription`,
+Use Kubernetes 1.32.8+ with **classic OLM** (`CatalogSource` and `Subscription`,
 not OLM v1). This installs the Go controller in `cube-system` and watches all
 namespaces. Do not install it alongside a directly deployed Go or Kopf
 controller. Remove the previous installation's controller and RBAC before
 handing ownership to OLM; do not delete the CRD or existing CubeClusters.
+
+The Kubernetes 1.32.8 minimum applies to newly generated bundles. The already
+published v0.1.0 catalog referenced below still requires Kubernetes 1.34+;
+source changes do not update published images or the OperatorHub submission.
 
 If OLM is not already installed, install it once with
 [Operator SDK](https://sdk.operatorframework.io/docs/installation/):
